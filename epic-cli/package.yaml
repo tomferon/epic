@@ -1,0 +1,29 @@
+name:                 epic-cli
+version:              0.1.0.0
+synopsis:             The command line tool to manage scripts in Epic
+homepage:             https://github.com/thoferon/epic#readme
+license:              BSD3
+author:               Thomas Feron
+maintainer:           thomas.feron@redspline.com
+copyright:            2017 Thomas Feron
+category:             Language
+
+ghc-options:          -Wall
+
+default-extensions:
+  - RecordWildCards
+
+executables:
+  epic:
+    main:             Main.hs
+    source-dirs:      src
+    dependencies:
+      - base >= 4.7 && < 5
+      - epic ==0.1.0.0
+      - attoparsec
+      - directory
+      - filepath
+      - mtl
+      - optparse-applicative
+      - tar
+      - text

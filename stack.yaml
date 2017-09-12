@@ -1,0 +1,7 @@
+resolver: nightly-2017-08-15
+packages:
+- epic
+- epic-cli
+extra-deps: []
+flags: {}
+extra-package-dbs: []

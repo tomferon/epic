@@ -1,0 +1,10 @@
+module MyApp
+
+import MyApp.Helpers
+
+type List a
+  = Cons a (List a)
+  | Nil
+
+plusOne : Int -> Int
+plusOne = flip plus 1

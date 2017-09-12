@@ -1,0 +1,45 @@
+name:                 epic
+version:              0.1.0.0
+synopsis:             A simple purely functional embedded language
+homepage:             https://github.com/thoferon/epic#readme
+license:              BSD3
+author:               Thomas Feron
+maintainer:           thomas.feron@redspline.com
+copyright:            2017 Thomas Feron
+category:             Language
+
+extra-source-files:
+  - README.md
+
+ghc-options:          -Wall
+
+dependencies:
+  - base >= 4.7 && < 5
+  - text
+
+default-extensions:
+  - LambdaCase
+  - OverloadedStrings
+  - TupleSections
+  - FlexibleContexts
+
+library:
+  source-dirs:        src
+  dependencies:
+    - attoparsec
+    - directory
+    - filepath
+    - lens
+    - mtl
+
+tests:
+  unit-tests:
+    source-dirs:      tests
+    main:             Main.hs
+    dependencies:
+      - epic
+      - QuickCheck
+      - tasty
+      - tasty-discover
+      - tasty-hspec
+      - tasty-quickcheck
