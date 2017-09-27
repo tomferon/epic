@@ -17,8 +17,6 @@ import qualified Data.Text as T
 import           Epic.Language
 import           Epic.PrettyPrinter
 
--- FIXME: Either Int T.Text -> Int: all references' types are known
-
 -- | Environment of the currently typechecked term. The typed modules are in the
 -- reversed order of the import statements.
 data Environment = Environment
@@ -51,7 +49,7 @@ buildEnvironment allModules =
                                 <> " when building type checking environment"
         Just _mod -> go (_mod : acc) names -- reversed order!
 
-type TypeChecker = StateT (Int, [(Either Int T.Text, MetaType)]) (Either T.Text)
+type TypeChecker = StateT (Int, [(Int, MetaType)]) (Either T.Text)
 
 toMetaType :: Type -> MetaType
 toMetaType = cata $ \case
@@ -63,16 +61,15 @@ toMetaType = cata $ \case
   TypeConstructorF ref -> TypeConstructorM ref
   TypeApplicationF t t' -> TypeApplicationM t t'
 
-substMetaType :: Either Int T.Text -> MetaType -> MetaType -> MetaType
+substMetaType :: Int -> MetaType -> MetaType -> MetaType
 substMetaType i repl = cata $ \case
   MetaIndexF i'| i == i' -> repl
   mt -> Fix mt
 
-substMetaTypes :: [(Either Int T.Text, MetaType)] -> MetaType -> MetaType
+substMetaTypes :: [(Int, MetaType)] -> MetaType -> MetaType
 substMetaTypes mts mt = foldr (\(i,t') t -> substMetaType i t' t) mt mts
 
-fromMetaType :: [(Either Int T.Text, MetaType)] -> MetaType
-             -> Either T.Text Type
+fromMetaType :: [(Int, MetaType)] -> MetaType -> Either T.Text Type
 fromMetaType mts mt = do
     let mt' = substMetaTypes mts mt
         indices = cata collectIndices mt'
@@ -82,7 +79,7 @@ fromMetaType mts mt = do
   where
     collectIndices :: MetaF TypeF [Int] -> [Int]
     collectIndices = \case
-      MetaIndexF (Left i) -> [i]
+      MetaIndexF i -> [i]
       MetaBase (FunctionTypeF is is') -> is `union` is'
       MetaBase (UniversalTypeF is) -> is
       MetaBase (TypeApplicationF is is') -> is `union` is'
@@ -90,12 +87,10 @@ fromMetaType mts mt = do
 
     go :: Int -> [Int] -> MetaType -> Either T.Text Type
     go base indices = \case
-      MetaIndex (Left mi) ->
+      MetaIndex mi ->
         case elemIndex mi indices of
           Nothing -> Left "fromMetaType: the impossible happened"
           Just dbi -> return $ TypeVariable $ base + dbi
-      MetaIndex (Right ref) ->
-        Left $ "can't resolve type of " <> ref
       TypeVariableM dbi -> return $ TypeVariable dbi
       FunctionTypeM t t' ->
         FunctionType <$> go base indices t <*> go base indices t'
@@ -122,11 +117,11 @@ getVariableType ctx i = case ctx ^? element i of
 
 newMetaVar :: TypeChecker (Int, MetaType)
 newMetaVar = do
-  (n, mts) <- get
-  put (n + 1, mts)
-  return (n, MetaIndex (Left n))
+  (i, mts) <- get
+  put (i + 1, mts)
+  return (i, MetaIndex i)
 
-checkOccurence :: Either Int T.Text -> MetaType -> Bool
+checkOccurence :: Int -> MetaType -> Bool
 checkOccurence i = \case
   MetaIndex i' -> i == i'
   TypeVariableM _ -> False
@@ -137,7 +132,7 @@ checkOccurence i = \case
   TypeConstructorM _ -> False
   TypeApplicationM t t' -> checkOccurence i t || checkOccurence i t'
 
-addMetaType :: Either Int T.Text -> MetaType -> TypeChecker ()
+addMetaType :: Int -> MetaType -> TypeChecker ()
 addMetaType i t = do
   (n, mts) <- get
   -- We want to ensure an invariant: references between elements of the list
@@ -152,12 +147,12 @@ addMetaType i t = do
                                        <> " = " <> ppMetaType t'
       traceShow (i, t') $ put (n, (i, t') : mts)
 
-findMetaType :: Either Int T.Text -> TypeChecker (Maybe MetaType)
+findMetaType :: Int -> TypeChecker (Maybe MetaType)
 findMetaType i = do
   (_, mts) <- get
   return $ lookup i mts
 
-getMetaType :: Either Int T.Text -> TypeChecker MetaType
+getMetaType :: Int -> TypeChecker MetaType
 getMetaType i = do
   mMT <- findMetaType i
   case mMT of
@@ -239,7 +234,7 @@ typeOf' env ctx t = traceShow t $ case t of
     ty2 <- typeOf' env ctx te2
     (i, tyU) <- newMetaVar
     unify (FunctionTypeM ty2 tyU) ty1
-    getMetaType $ Left i
+    getMetaType i
 
   IfThenElse tec te1 te2 -> do
     tyc <- typeOf' env ctx tec
@@ -249,7 +244,7 @@ typeOf' env ctx t = traceShow t $ case t of
     (i, tyU) <- newMetaVar
     unify tyU ty1
     unify tyU ty2
-    getMetaType $ Left i
+    getMetaType i
 
   PrimBool _ -> return PrimTypeBoolM
   PrimInt _ -> return PrimTypeIntM
@@ -358,7 +353,7 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
             in TypeVariableM (i - count)
       mt -> Fix mt
 
-unifyMetaIndex :: Either Int T.Text -> MetaType -> TypeChecker ()
+unifyMetaIndex :: Int -> MetaType -> TypeChecker ()
 unifyMetaIndex i t = do
   mMT <- findMetaType i
   case mMT of

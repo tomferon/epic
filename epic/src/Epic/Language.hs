@@ -15,10 +15,7 @@ data Reference
 --  | FQNameReference ModuleName T.Text
   deriving (Eq, Show)
 
-data MetaF b f
-  = MetaIndexF (Either Int T.Text)
-  | MetaBase (b f)
-  deriving Functor
+data MetaF b f = MetaIndexF Int | MetaBase (b f) deriving Functor
 
 deriveEq1 ''MetaF
 deriveShow1 ''MetaF

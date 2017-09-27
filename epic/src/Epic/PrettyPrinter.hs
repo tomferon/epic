@@ -61,8 +61,7 @@ ppMetaType = go False (nameStream ()) []
   where
     go :: Bool -> Stream T.Text -> [T.Text] -> MetaType -> T.Text
     go paren ns names = \case
-      MetaIndex (Left i) -> "?" <> T.pack (show i)
-      MetaIndex (Right r) -> "?" <> r
+      MetaIndex i -> "?" <> T.pack (show i)
       TypeVariableM i -> names !! i
       FunctionTypeM t t' ->
         let txt = go True ns names t <> " -> " <> go False ns names t'
