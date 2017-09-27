@@ -22,6 +22,7 @@ import           Epic.PrettyPrinter
 data Environment = Environment
   { _typedModules  :: [TypedModule]
   , _localBindings :: [(T.Text, Type)]
+  , _localTypes    :: [TypeDefinition Kind]
   }
 
 makeLenses ''Environment
@@ -35,10 +36,19 @@ getRefType env ref@(NameReference name) = do
     Nothing  -> throwError $ "can't find reference " <> ppReference ref
     Just typ -> return typ
 
+getRefKind :: MonadError T.Text m => Environment -> Reference -> m Kind
+getRefKind env ref@(NameReference name) = do
+  let pred      = ((== name) . (^.typeName))
+      mLocal    = findOf (localTypes . each)                  pred env
+      mImported = findOf (typedModules . each . types . each) pred env
+  case mLocal <|> mImported of
+    Nothing -> throwError $ "can't find reference " <> ppReference ref
+    Just def -> return $ foldr Arrow Star (def ^. variables)
+
 buildEnvironment :: MonadError T.Text m => [TypedModule] -> [ModuleName]
                  -> m Environment
 buildEnvironment allModules =
-    fmap (\tms -> Environment tms []) . go []
+    fmap (\tms -> Environment tms [] []) . go []
   where
     go :: MonadError T.Text m => [TypedModule] -> [ModuleName]
        -> m [TypedModule]
@@ -49,29 +59,23 @@ buildEnvironment allModules =
                                 <> " when building type checking environment"
         Just _mod -> go (_mod : acc) names -- reversed order!
 
-type TypeChecker = StateT (Int, [(Int, MetaType)]) (Either T.Text)
+type TypeChecker meta = StateT (Int, [(Int, meta)]) (Either T.Text)
 
-toMetaType :: Type -> MetaType
-toMetaType = cata $ \case
-  TypeVariableF i -> TypeVariableM i
-  FunctionTypeF t t' -> FunctionTypeM t t'
-  UniversalTypeF t -> UniversalTypeM t
-  PrimTypeBoolF -> PrimTypeBoolM
-  PrimTypeIntF -> PrimTypeIntM
-  TypeConstructorF ref -> TypeConstructorM ref
-  TypeApplicationF t t' -> TypeApplicationM t t'
+toMeta :: Functor f => Fix f -> Fix (MetaF f)
+toMeta = cata (Fix . MetaBase)
 
-substMetaType :: Int -> MetaType -> MetaType -> MetaType
-substMetaType i repl = cata $ \case
+substMeta :: Functor f => Int -> Fix (MetaF f) -> Fix (MetaF f) -> Fix (MetaF f)
+substMeta i repl = cata $ \case
   MetaIndexF i'| i == i' -> repl
-  mt -> Fix mt
+  m -> Fix m
 
-substMetaTypes :: [(Int, MetaType)] -> MetaType -> MetaType
-substMetaTypes mts mt = foldr (\(i,t') t -> substMetaType i t' t) mt mts
+substMetas :: Functor f => [(Int, Fix (MetaF f))] -> Fix (MetaF f)
+           -> Fix (MetaF f)
+substMetas ms m = foldr (\(i,t') t -> substMeta i t' t) m ms
 
 fromMetaType :: [(Int, MetaType)] -> MetaType -> Either T.Text Type
 fromMetaType mts mt = do
-    let mt' = substMetaTypes mts mt
+    let mt' = substMetas mts mt
         indices = cata collectIndices mt'
     t <- go 0 indices mt'
     return $ addUniversals indices t
@@ -115,111 +119,76 @@ getVariableType ctx i = case ctx ^? element i of
   Nothing -> Left "variable index out of bound"
   Just ty -> Right ty
 
-newMetaVar :: TypeChecker (Int, MetaType)
+newMetaVar :: TypeChecker (Fix (MetaF f)) (Int, Fix (MetaF f))
 newMetaVar = do
   (i, mts) <- get
   put (i + 1, mts)
   return (i, MetaIndex i)
 
-checkOccurence :: Int -> MetaType -> Bool
-checkOccurence i = \case
-  MetaIndex i' -> i == i'
-  TypeVariableM _ -> False
-  FunctionTypeM t t' -> checkOccurence i t || checkOccurence i t'
-  UniversalTypeM t -> checkOccurence i t
-  PrimTypeBoolM -> False
-  PrimTypeIntM -> False
-  TypeConstructorM _ -> False
-  TypeApplicationM t t' -> checkOccurence i t || checkOccurence i t'
+addMetaType :: Int -> MetaType -> TypeChecker MetaType ()
+addMetaType = addMeta checkOccurence ppMetaType
+  where
+    checkOccurence :: Int -> MetaType -> Bool
+    checkOccurence i = \case
+      MetaIndex i' -> i == i'
+      TypeVariableM _ -> False
+      FunctionTypeM t t' -> checkOccurence i t || checkOccurence i t'
+      UniversalTypeM t -> checkOccurence i t
+      PrimTypeBoolM -> False
+      PrimTypeIntM -> False
+      TypeConstructorM _ -> False
+      TypeApplicationM t t' -> checkOccurence i t || checkOccurence i t'
 
-addMetaType :: Int -> MetaType -> TypeChecker ()
-addMetaType i t = do
-  (n, mts) <- get
+addMetaKind :: Int -> MetaKind -> TypeChecker MetaKind ()
+addMetaKind = addMeta checkOccurence ppMetaKind
+  where
+    checkOccurence :: Int -> MetaKind -> Bool
+    checkOccurence i = \case
+      MetaIndex i' -> i == i'
+      StarM -> False
+      ArrowM k k' -> checkOccurence i k || checkOccurence i k'
+
+addMeta :: Functor f => (Int -> Fix (MetaF f) -> Bool)
+        -> (Fix (MetaF f) -> T.Text) -> Int -> Fix (MetaF f)
+        -> TypeChecker (Fix (MetaF f)) ()
+addMeta checkOccurence pp i m = do
+  (n, ms) <- get
   -- We want to ensure an invariant: references between elements of the list
   -- only go from right to left.
-  let t' = substMetaTypes mts t
-  case t' of
+  let m' = substMetas ms m
+  case m' of
     MetaIndex i' | i == i' ->
       return () -- Could happen after substitutions, we just discard those.
     _ -> do
-      when (checkOccurence i t') $ throwError $
-        "self-referencing meta type ?" <> T.pack (show i)
-                                       <> " = " <> ppMetaType t'
-      traceShow (i, t') $ put (n, (i, t') : mts)
+      when (checkOccurence i m') $ throwError $
+        "self-referencing ?" <> T.pack (show i) <> " = " <> pp m'
+      put (n, (i, m') : ms)
 
-findMetaType :: Int -> TypeChecker (Maybe MetaType)
-findMetaType i = do
-  (_, mts) <- get
-  return $ lookup i mts
+findMeta :: Int -> TypeChecker meta (Maybe meta)
+findMeta i = do
+  (_, ms) <- get
+  return $ lookup i ms
 
-getMetaType :: Int -> TypeChecker MetaType
-getMetaType i = do
-  mMT <- findMetaType i
-  case mMT of
+getMeta :: Int -> TypeChecker (Fix (MetaF f)) (Fix (MetaF f))
+getMeta i = do
+  mm <- findMeta i
+  case mm of
     Nothing -> return $ MetaIndex i
-    Just mt -> return mt
-
-typeOfModule :: MonadError T.Text m => Maybe [T.Text]
-             -> Environment -> Module -> m TypedModule
-typeOfModule mForeignNames env _mod = either throwError return $ do
-    let emptyMod = _mod & types       .~ []
-                        & definitions .~ []
-    res <- foldM typeStep (env, emptyMod) (_mod ^. types)
-    snd <$> foldM termStep res (_mod ^. definitions)
-
-  where
-    typeStep :: (Environment, TypedModule) -> TypeDefinition ()
-             -> Either T.Text (Environment, TypedModule)
-    typeStep (env, typedMod) def = do
-      return (env, typedMod) -- FIXME
-
-
-    termStep :: (Environment, TypedModule) -> Definition (Maybe Type)
-             -> Either T.Text (Environment, TypedModule)
-    termStep (env, typedMod) = \case
-      TermDefinition name term mType -> do
-        (mt, (_, mts)) <-
-          runStateT (typeOf' env emptyContext term) (0, [])
-        inferred <- fromMetaType mts mt
-
-        typ <- case mType of
-          Nothing -> return inferred
-          Just t  -> do
-            checkMoreSpecific t inferred
-            return t
-
-        let env' = env & localBindings %~ ((name, typ) :)
-            typedMod' =
-              typedMod & definitions %~ (TermDefinition name term typ :)
-        traceShow (name, ppType typ) $ return (env', typedMod')
-
-      ForeignDefinition name typ -> do
-        case mForeignNames of
-          Just names | name `notElem` names ->
-            throwError $ "foreign value " <> name <> " not available in context"
-          _ -> return ()
-
-        let env' = env & localBindings %~ ((name, typ) :)
-            typedMod' =
-              typedMod & definitions %~ (ForeignDefinition name typ :)
-        return (env', typedMod')
-
-    checkMoreSpecific :: Type -> Type -> Either T.Text ()
-    checkMoreSpecific s g =
-      void $ runStateT (unify (toMetaType s) (toMetaType g)) (0, [])
+    Just m  -> return m
 
 typeOf :: Environment -> Term -> Either T.Text Type
 typeOf env term = do
   (mt, (_, mts)) <- runStateT (typeOf' env emptyContext term) (0, [])
+  -- FIXME: check well-kindedness
   traceShow (">>", ppMetaType mt) $ fromMetaType mts mt
 
-typeOf' :: Environment -> Context -> Term -> TypeChecker MetaType
+typeOf' :: Environment -> Context -> Term -> TypeChecker MetaType MetaType
 typeOf' env ctx t = traceShow t $ case t of
   Variable i -> lift $ getVariableType ctx i
-  Reference ref -> toMetaType <$> getRefType env ref
+  Reference ref -> toMeta <$> getRefType env ref
 
   Abstraction (Just tyIn) te -> do
-    let tyIn' = toMetaType tyIn
+    let tyIn' = toMeta tyIn
     tyOut <- typeOf' env (tyIn' : ctx) te
     return $ FunctionTypeM tyIn' tyOut
 
@@ -234,7 +203,7 @@ typeOf' env ctx t = traceShow t $ case t of
     ty2 <- typeOf' env ctx te2
     (i, tyU) <- newMetaVar
     unify (FunctionTypeM ty2 tyU) ty1
-    getMetaType i
+    getMeta i
 
   IfThenElse tec te1 te2 -> do
     tyc <- typeOf' env ctx tec
@@ -244,7 +213,7 @@ typeOf' env ctx t = traceShow t $ case t of
     (i, tyU) <- newMetaVar
     unify tyU ty1
     unify tyU ty2
-    getMetaType i
+    getMeta i
 
   PrimBool _ -> return PrimTypeBoolM
   PrimInt _ -> return PrimTypeIntM
@@ -257,7 +226,7 @@ typeOf' env ctx t = traceShow t $ case t of
 
 -- | Unify the two given types and adapt the constraints in the state.
 -- The first given type is a subtype of the second.
-unify :: MetaType -> MetaType -> TypeChecker ()
+unify :: MetaType -> MetaType -> TypeChecker MetaType ()
 unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
     (TypeVariableM i, TypeVariableM i') | i == i' -> return ()
 
@@ -294,7 +263,7 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
 
   where
     universalHelper :: Int -> MetaType -> MetaType
-                    -> MetaType -> TypeChecker ()
+                    -> MetaType -> TypeChecker MetaType ()
     universalHelper count tyIn tyOut = \case
       UniversalTypeM ty -> universalHelper (count+1) tyIn tyOut ty
       FunctionTypeM tyIn' tyOut' -> traceShow ("---", tyIn', tyOut', tyIn, tyOut) $ do
@@ -312,7 +281,7 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
     -- constructed type together with the list of replacements.
     -- It does not replace type variables of other UniversalType it encounters.
     monomorphiseType :: Int -> [(Int, MetaType)] -> MetaType
-                     -> TypeChecker (MetaType, [(Int, MetaType)])
+                     -> TypeChecker MetaType (MetaType, [(Int, MetaType)])
     monomorphiseType threshold acc = \case
       t@(MetaIndex _) -> return (t, acc)
       TypeVariableM i
@@ -353,9 +322,9 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
             in TypeVariableM (i - count)
       mt -> Fix mt
 
-unifyMetaIndex :: Int -> MetaType -> TypeChecker ()
+unifyMetaIndex :: Int -> MetaType -> TypeChecker MetaType ()
 unifyMetaIndex i t = do
-  mMT <- findMetaType i
+  mMT <- findMeta i
   case mMT of
     Nothing -> addMetaType i t
     Just mt -> unify mt t
@@ -370,6 +339,62 @@ bumpTypeIndexFrom from = \case
   TypeApplicationM t t' ->
     TypeApplicationM (bumpTypeIndexFrom from t) (bumpTypeIndexFrom from t')
   t -> t
+
+kindCheckTypeDefinition :: Environment -> TypeDefinition ()
+                        -> Either T.Text (TypeDefinition Kind)
+kindCheckTypeDefinition env def = do
+  undefined
+
+typeOfModule :: MonadError T.Text m => Maybe [T.Text]
+             -> Environment -> Module -> m TypedModule
+typeOfModule mForeignNames env _mod = either throwError return $ do
+    let emptyMod = _mod & types       .~ []
+                        & definitions .~ []
+    res <- foldM typeStep (env, emptyMod) (_mod ^. types)
+    snd <$> foldM termStep res (_mod ^. definitions)
+
+  where
+    typeStep :: (Environment, TypedModule) -> TypeDefinition ()
+             -> Either T.Text (Environment, TypedModule)
+    typeStep (env, typedMod) def = do
+      def' <- kindCheckTypeDefinition env def
+      let env'      = env      & localTypes %~ (def' :)
+          typedMod' = typedMod & types      %~ (def' :)
+      traceShow (def ^. typeName, def' ^. variables) $ return (env', typedMod')
+
+    termStep :: (Environment, TypedModule) -> Definition (Maybe Type)
+             -> Either T.Text (Environment, TypedModule)
+    termStep (env, typedMod) = \case
+      TermDefinition name term mType -> do
+        (mt, (_, mts)) <-
+          runStateT (typeOf' env emptyContext term) (0, [])
+        inferred <- fromMetaType mts mt
+
+        typ <- case mType of
+          Nothing -> return inferred
+          Just t  -> do
+            checkMoreSpecific t inferred
+            return t
+
+        let env' = env & localBindings %~ ((name, typ) :)
+            typedMod' =
+              typedMod & definitions %~ (TermDefinition name term typ :)
+        traceShow (name, ppType typ) $ return (env', typedMod')
+
+      ForeignDefinition name typ -> do
+        case mForeignNames of
+          Just names | name `notElem` names ->
+            throwError $ "foreign value " <> name <> " not available in context"
+          _ -> return ()
+
+        let env' = env & localBindings %~ ((name, typ) :)
+            typedMod' =
+              typedMod & definitions %~ (ForeignDefinition name typ :)
+        return (env', typedMod')
+
+    checkMoreSpecific :: Type -> Type -> Either T.Text ()
+    checkMoreSpecific s g =
+      void $ runStateT (unify (toMeta s) (toMeta g)) (0, [])
 
 typeCheckModules :: MonadError T.Text m => Maybe [T.Text] -> [Module]
                  -> m [TypedModule]

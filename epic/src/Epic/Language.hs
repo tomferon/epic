@@ -15,14 +15,14 @@ data Reference
 --  | FQNameReference ModuleName T.Text
   deriving (Eq, Show)
 
-data MetaF b f = MetaIndexF Int | MetaBase (b f) deriving Functor
+data MetaF b f = MetaIndexF Int | MetaBase (b f) deriving (Eq, Show, Functor)
 
 deriveEq1 ''MetaF
 deriveShow1 ''MetaF
 
 pattern MetaIndex i = Fix (MetaIndexF i)
 
-data KindF f = ArrowF f f | StarF deriving (Eq, Show)
+data KindF f = ArrowF f f | StarF deriving (Eq, Show, Functor)
 
 deriveEq1 ''KindF
 deriveShow1 ''KindF

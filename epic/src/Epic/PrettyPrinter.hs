@@ -27,6 +27,8 @@ nameStream _ = go (map T.singleton alphabet)
     alphabet :: [Char]
     alphabet = "abcdefghijklmnopqrstuvwxyz"
 
+-- FIXME: Remove duplication in ppType and ppMetaType
+
 ppType :: Type -> T.Text
 ppType = go False (nameStream ()) []
   where
@@ -97,3 +99,12 @@ ppKind = go False
     go paren = \case
       Star -> "*"
       Arrow k k' -> go True k <> " -> " <> go False k'
+
+ppMetaKind :: MetaKind -> T.Text
+ppMetaKind = go False
+  where
+    go :: Bool -> MetaKind -> T.Text
+    go paren = \case
+      MetaIndex i -> "?" <> T.pack (show i)
+      StarM -> "*"
+      ArrowM k k' -> go True k <> " -> " <> go False k'
