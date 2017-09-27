@@ -22,15 +22,20 @@ default-extensions:
   - OverloadedStrings
   - TupleSections
   - FlexibleContexts
+  - TemplateHaskell
+  - DeriveFunctor
+  - PatternSynonyms
 
 library:
   source-dirs:        src
   dependencies:
     - attoparsec
+    - deriving-compat
     - directory
     - filepath
     - lens
     - mtl
+    - recursion-schemes
 
 tests:
   unit-tests:

@@ -1,11 +1,12 @@
-{-# LANGUAGE DeriveFoldable #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module Epic.Language where
 
 import           Control.Lens
 
+import           Data.Eq.Deriving (deriveEq1)
+import           Data.Functor.Foldable (Fix(..))
 import qualified Data.Text as T
+
+import           Text.Show.Deriving (deriveShow1)
 
 type ModuleName = [T.Text]
 
@@ -14,38 +15,84 @@ data Reference
 --  | FQNameReference ModuleName T.Text
   deriving (Eq, Show)
 
-data TypeI i
-  = TypeVariable i
-  | FunctionType (TypeI i) (TypeI i)
-  | UniversalType (TypeI i)
-  | PrimTypeBool
-  | PrimTypeInt
-  | TypeConstructor Reference
-  | TypeApplication (TypeI i) (TypeI i)
-  deriving (Eq, Show, Foldable)
+data MetaF b f
+  = MetaIndexF (Either Int T.Text)
+  | MetaBase (b f)
+  deriving Functor
 
-type Type = TypeI Int
+deriveEq1 ''MetaF
+deriveShow1 ''MetaF
 
-data TypeDefinition = TypeDefinition
+pattern MetaIndex i = Fix (MetaIndexF i)
+
+data KindF f = ArrowF f f | StarF deriving (Eq, Show)
+
+deriveEq1 ''KindF
+deriveShow1 ''KindF
+
+type Kind = Fix KindF
+
+pattern Arrow k k' = Fix (ArrowF k k')
+pattern Star = Fix StarF
+
+type MetaKind = Fix (MetaF KindF)
+
+pattern ArrowM k k' = Fix (MetaBase (ArrowF k k'))
+pattern StarM       = Fix (MetaBase StarF)
+
+data TypeF f
+  = TypeVariableF Int
+  | FunctionTypeF f f
+  | UniversalTypeF f
+  | PrimTypeBoolF
+  | PrimTypeIntF
+  | TypeConstructorF Reference
+  | TypeApplicationF f f
+  deriving (Eq, Show, Functor)
+
+deriveEq1 ''TypeF
+deriveShow1 ''TypeF
+
+type Type = Fix TypeF
+
+pattern TypeVariable i       = Fix (TypeVariableF i)
+pattern FunctionType t t'    = Fix (FunctionTypeF t t')
+pattern UniversalType t      = Fix (UniversalTypeF t)
+pattern PrimTypeBool         = Fix PrimTypeBoolF
+pattern PrimTypeInt          = Fix PrimTypeIntF
+pattern TypeConstructor ref  = Fix (TypeConstructorF ref)
+pattern TypeApplication t t' = Fix (TypeApplicationF t t')
+
+type MetaType = Fix (MetaF TypeF)
+
+pattern TypeVariableM i       = Fix (MetaBase (TypeVariableF i))
+pattern FunctionTypeM t t'    = Fix (MetaBase (FunctionTypeF t t'))
+pattern UniversalTypeM t      = Fix (MetaBase (UniversalTypeF t))
+pattern PrimTypeBoolM         = Fix (MetaBase PrimTypeBoolF)
+pattern PrimTypeIntM          = Fix (MetaBase PrimTypeIntF)
+pattern TypeConstructorM ref  = Fix (MetaBase (TypeConstructorF ref))
+pattern TypeApplicationM t t' = Fix (MetaBase (TypeApplicationF t t'))
+
+data TypeDefinition k = TypeDefinition
   { _typeName     :: T.Text
-  , _variables    :: Int
+  , _variables    :: [k]
   , _constructors :: [(T.Text, [Type])]
   } deriving (Eq, Show)
 
 makeLenses ''TypeDefinition
 
-data TermI i
+data TermT t
   = Variable Int
   | Reference Reference
-  | Abstraction (Maybe (TypeI i)) (TermI i)
-  | Application (TermI i) (TermI i)
-  | IfThenElse (TermI i) (TermI i) (TermI i)
+  | Abstraction (Maybe t) (TermT t)
+  | Application (TermT t) (TermT t)
+  | IfThenElse (TermT t) (TermT t) (TermT t)
   | PrimBool Bool
   | PrimInt Int
-  | Fix
+  | FixTerm
   deriving (Eq, Show)
 
-type Term = TermI Int
+type Term = TermT Type
 
 data Definition t
   = TermDefinition T.Text Term t
@@ -62,15 +109,15 @@ defType f = \case
   TermDefinition n te ty -> fmap (TermDefinition n te) (f ty)
   ForeignDefinition n ty -> fmap (ForeignDefinition n) (f ty)
 
-data ModuleT t = Module
+data ModuleTK t k = Module
   { _moduleName  :: ModuleName
   , _exports     :: Maybe [T.Text]
   , _imports     :: [ModuleName]
-  , _types       :: [TypeDefinition]
+  , _types       :: [TypeDefinition k]
   , _definitions :: [Definition t]
   } deriving (Eq, Show)
 
-makeLenses ''ModuleT
+makeLenses ''ModuleTK
 
-type Module = ModuleT (Maybe Type)
-type TypedModule = ModuleT Type
+type Module = ModuleTK (Maybe Type) ()
+type TypedModule = ModuleTK Type Kind

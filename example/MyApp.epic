@@ -6,5 +6,10 @@ type List a
   = Cons a (List a)
   | Nil
 
+# Functions don't necessarily need to have the arguments in the definition.
 plusOne : Int -> Int
-plusOne = flip plus 1
+plusOne = flip plus 1 # Here, we use 'plus' which is defined in MyApp.Helpers
+
+# Because there is 'fix', we can create values which never return.
+bottom : forall a b. a -> b
+bottom = fix \f -> \x -> f x

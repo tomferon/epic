@@ -23,7 +23,7 @@ data ModulePart
   = TermDeclaration T.Text Term
   | TypeSignature T.Text Type
   | ForeignImport T.Text Type
-  | TypeDeclaration TypeDefinition
+  | TypeDeclaration (TypeDefinition ())
 
 parseModule :: MonadError T.Text m => T.Text -> m Module
 parseModule =
@@ -120,8 +120,8 @@ moduleParser = do
       _ <- sep indent''
       constructors <- typeCon indent'' (reverse params)
                       `sepBy` (sep indent'' >> char '|' >> sep indent'')
-      return $
-        TypeDeclaration $ TypeDefinition name (length params) constructors
+      return $ TypeDeclaration $
+        TypeDefinition name (map (const ()) params) constructors
 
     typeCon :: T.Text -> [T.Text] -> Parser (T.Text, [Type])
     typeCon indent names = do
@@ -137,6 +137,7 @@ moduleParser = do
 
     horizSep :: Parser ()
     horizSep = do
+      option () comment
       skipWhile isHorizontalSpace
       endOfLine
 
@@ -184,7 +185,7 @@ parseTerm =
 data Operator = Operator (T.Text -> Bool) Bool
 
 isOpChar :: Char -> Bool
-isOpChar = (`elem` ("+-*/.<>=?|!@#$%^&~:;" :: String))
+isOpChar = (`elem` ("+-*/.<>=?|!@$%^&~:;" :: String))
 
 operators :: [Operator]
 operators =
@@ -201,7 +202,6 @@ operators =
      , Operator (beginsWith '+') True
      , Operator (beginsWith '-') False
      , Operator (beginsWith '@') False
-     , Operator (beginsWith '#') True
      , Operator (beginsWith '*') True
      , Operator (beginsWith '/') False
      , Operator (beginsWith '%') False
@@ -224,7 +224,7 @@ termParser indent ops doAbs doIf doApp vars =
         <|> (char '('
              *> termParser indent operators True True True vars
              <* char ')')
-        <|> fix <|> bool <|> int <|> variableOrReference
+         <|> variableOrReference <|> fix <|> bool <|> int
       operation term ops <|> return term)
 
   where
@@ -284,10 +284,8 @@ termParser indent ops doAbs doIf doApp vars =
       ts <- termParser indent [] True True False vars `sepBy1` sep1 indent'
       return $ foldl Application t ts
 
-    -- FIXME: Variables starting with fix, true or false wouldn't be parsed.
-
     fix :: Parser Term
-    fix = string "fix" >> return Fix
+    fix = string "fix" >> return FixTerm
 
     bool :: Parser Term
     bool = (string "true" >> return (PrimBool True))
@@ -331,12 +329,19 @@ termParser indent ops doAbs doIf doApp vars =
 operator :: Parser T.Text
 operator = do
   c <- peekChar'
-  guard $ c `elem` ("|&<>=~:+-@#*/%!$^" :: String)
+  guard $ c `elem` ("|&<>=~:+-@*/%!$^" :: String)
   takeWhile1 isOpChar
+
+comment :: Parser ()
+comment = do
+  skipWhile isHorizontalSpace
+  _ <- char '#'
+  skipWhile (not . isEndOfLine)
 
 sep :: T.Text -> Parser T.Text
 sep indent = do
   (do
+    _ <- comment `sepBy` endOfLine
     skipWhile isHorizontalSpace
     endOfLine
     string indent

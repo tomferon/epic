@@ -28,7 +28,7 @@ nameStream _ = go (map T.singleton alphabet)
     alphabet = "abcdefghijklmnopqrstuvwxyz"
 
 ppType :: Type -> T.Text
-ppType = go False (nameStream ()) [] . traceShowId
+ppType = go False (nameStream ()) []
   where
     go :: Bool -> Stream T.Text -> [T.Text] -> Type -> T.Text
     go paren ns names = \case
@@ -56,6 +56,45 @@ ppType = go False (nameStream ()) [] . traceShowId
         let forallNames = foldr (\name txt -> txt <> " " <> name) "" vars
         in "forall" <> forallNames <> ". " <> go False ns names t
 
+ppMetaType :: MetaType -> T.Text
+ppMetaType = go False (nameStream ()) []
+  where
+    go :: Bool -> Stream T.Text -> [T.Text] -> MetaType -> T.Text
+    go paren ns names = \case
+      MetaIndex (Left i) -> "?" <> T.pack (show i)
+      MetaIndex (Right r) -> "?" <> r
+      TypeVariableM i -> names !! i
+      FunctionTypeM t t' ->
+        let txt = go True ns names t <> " -> " <> go False ns names t'
+        in if paren then "(" <> txt <> ")" else txt
+      t@(UniversalTypeM _) ->
+        let txt = universals [] ns names t
+        in if paren then "(" <> txt <> ")" else txt
+      PrimTypeBoolM -> "Bool"
+      PrimTypeIntM -> "Int"
+      TypeConstructorM ref -> ppReference ref
+      TypeApplicationM t t' ->
+        let txt = go True ns names t <> " " <> go False ns names t'
+        in if paren then "(" <> txt <> ")" else txt
+
+    universals :: [T.Text] -> Stream T.Text -> [T.Text] -> MetaType
+               -> T.Text
+    universals vars ns names = \case
+      UniversalTypeM t ->
+        let Cons name ns' = ns
+        in universals (name : vars) ns' (name : names) t
+      t ->
+        let forallNames = foldr (\name txt -> txt <> " " <> name) "" vars
+        in "forall" <> forallNames <> ". " <> go False ns names t
+
 ppReference :: Reference -> T.Text
 ppReference = \case
   NameReference name -> name
+
+ppKind :: Kind -> T.Text
+ppKind = go False
+  where
+    go :: Bool -> Kind -> T.Text
+    go paren = \case
+      Star -> "*"
+      Arrow k k' -> go True k <> " -> " <> go False k'

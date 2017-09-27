@@ -9,12 +9,15 @@ import           Control.Lens hiding (Context)
 import           Control.Monad.Except
 import           Control.Monad.State
 
+import           Data.Functor.Foldable
 import           Data.List
 import           Data.Monoid
 import qualified Data.Text as T
 
 import           Epic.Language
 import           Epic.PrettyPrinter
+
+-- FIXME: Either Int T.Text -> Int: all references' types are known
 
 -- | Environment of the currently typechecked term. The typed modules are in the
 -- reversed order of the import statements.
@@ -48,91 +51,72 @@ buildEnvironment allModules =
                                 <> " when building type checking environment"
         Just _mod -> go (_mod : acc) names -- reversed order!
 
-data MetaIndex
-  = DeBruijnIndex Int
-  | MetaIndex (Either Int T.Text)
-  deriving (Eq, Show)
-
-type MetaType = TypeI MetaIndex
-
 type TypeChecker = StateT (Int, [(Either Int T.Text, MetaType)]) (Either T.Text)
 
 toMetaType :: Type -> MetaType
-toMetaType = \case
-  TypeVariable i -> TypeVariable (DeBruijnIndex i)
-  FunctionType t t' -> FunctionType (toMetaType t) (toMetaType t')
-  UniversalType t -> UniversalType (toMetaType t)
-  PrimTypeBool -> PrimTypeBool
-  PrimTypeInt -> PrimTypeInt
-  TypeConstructor ref -> TypeConstructor ref
-  TypeApplication t t' -> TypeApplication (toMetaType t) (toMetaType t')
+toMetaType = cata $ \case
+  TypeVariableF i -> TypeVariableM i
+  FunctionTypeF t t' -> FunctionTypeM t t'
+  UniversalTypeF t -> UniversalTypeM t
+  PrimTypeBoolF -> PrimTypeBoolM
+  PrimTypeIntF -> PrimTypeIntM
+  TypeConstructorF ref -> TypeConstructorM ref
+  TypeApplicationF t t' -> TypeApplicationM t t'
 
 substMetaType :: Either Int T.Text -> MetaType -> MetaType -> MetaType
-substMetaType i repl = \case
-  mt@(TypeVariable (DeBruijnIndex _)) -> mt
-  mt@(TypeVariable (MetaIndex i'))
-    | i == i'   -> repl
-    | otherwise -> mt
-  FunctionType t t' ->
-    FunctionType (substMetaType i repl t) (substMetaType i repl t')
-  UniversalType t -> UniversalType (substMetaType i repl t)
-  PrimTypeBool -> PrimTypeBool
-  PrimTypeInt -> PrimTypeInt
-  TypeConstructor ref -> TypeConstructor ref
-  TypeApplication t t' ->
-    TypeApplication (substMetaType i repl t) (substMetaType i repl t')
+substMetaType i repl = cata $ \case
+  MetaIndexF i'| i == i' -> repl
+  mt -> Fix mt
 
 substMetaTypes :: [(Either Int T.Text, MetaType)] -> MetaType -> MetaType
 substMetaTypes mts mt = foldr (\(i,t') t -> substMetaType i t' t) mt mts
 
 fromMetaType :: [(Either Int T.Text, MetaType)] -> MetaType
              -> Either T.Text Type
-fromMetaType mts mt = traceShow ("fromMetaType", mt, mts) $ do
+fromMetaType mts mt = do
     let mt' = substMetaTypes mts mt
-        indices = foldl collectIndices [] mt'
+        indices = cata collectIndices mt'
     t <- go 0 indices mt'
     return $ addUniversals indices t
 
   where
-    collectIndices :: [Int] -> MetaIndex -> [Int]
-    collectIndices acc = \case
-      MetaIndex (Left i) | i `elem` acc -> acc
-                         | otherwise    -> i : acc
-      _ -> acc
+    collectIndices :: MetaF TypeF [Int] -> [Int]
+    collectIndices = \case
+      MetaIndexF (Left i) -> [i]
+      MetaBase (FunctionTypeF is is') -> is `union` is'
+      MetaBase (UniversalTypeF is) -> is
+      MetaBase (TypeApplicationF is is') -> is `union` is'
+      _ -> []
 
     go :: Int -> [Int] -> MetaType -> Either T.Text Type
     go base indices = \case
-      TypeVariable (MetaIndex (Left mi)) ->
+      MetaIndex (Left mi) ->
         case elemIndex mi indices of
           Nothing -> Left "fromMetaType: the impossible happened"
           Just dbi -> return $ TypeVariable $ base + dbi
-      TypeVariable (MetaIndex (Right ref)) ->
+      MetaIndex (Right ref) ->
         Left $ "can't resolve type of " <> ref
-      TypeVariable (DeBruijnIndex dbi) -> return $ TypeVariable dbi
-      FunctionType t t' ->
+      TypeVariableM dbi -> return $ TypeVariable dbi
+      FunctionTypeM t t' ->
         FunctionType <$> go base indices t <*> go base indices t'
-      UniversalType t -> UniversalType <$> go (base + 1) indices t
-      PrimTypeBool -> return PrimTypeBool
-      PrimTypeInt -> return PrimTypeInt
-      TypeConstructor ref -> return $ TypeConstructor ref
-      TypeApplication t t' ->
+      UniversalTypeM t -> UniversalType <$> go (base + 1) indices t
+      PrimTypeBoolM -> return PrimTypeBool
+      PrimTypeIntM -> return PrimTypeInt
+      TypeConstructorM ref -> return $ TypeConstructor ref
+      TypeApplicationM t t' ->
         TypeApplication <$> go base indices t <*> go base indices t'
 
     addUniversals :: [a] -> Type -> Type
     addUniversals [] t = t
     addUniversals (_ : xs) t = UniversalType (addUniversals xs t)
 
-newtype Context = Context
-  { _vars :: [MetaType]
-  } deriving (Eq, Show)
-
-makeLenses ''Context
+type Context = [MetaType]
 
 emptyContext :: Context
-emptyContext = Context []
+emptyContext = []
 
 getVariableType :: Context -> Int -> Either T.Text MetaType
-getVariableType ctx i = case ctx ^. vars ^? element i of
+getVariableType ctx i = case ctx ^? element i of
   Nothing -> Left "variable index out of bound"
   Just ty -> Right ty
 
@@ -140,18 +124,18 @@ newMetaVar :: TypeChecker (Int, MetaType)
 newMetaVar = do
   (n, mts) <- get
   put (n + 1, mts)
-  return (n, TypeVariable (MetaIndex (Left n)))
+  return (n, MetaIndex (Left n))
 
 checkOccurence :: Either Int T.Text -> MetaType -> Bool
 checkOccurence i = \case
-  TypeVariable (DeBruijnIndex _) -> False
-  TypeVariable (MetaIndex i') -> i == i'
-  FunctionType t t' -> checkOccurence i t || checkOccurence i t'
-  UniversalType t -> checkOccurence i t
-  PrimTypeBool -> False
-  PrimTypeInt -> False
-  TypeConstructor _ -> False
-  TypeApplication t t' -> checkOccurence i t || checkOccurence i t'
+  MetaIndex i' -> i == i'
+  TypeVariableM _ -> False
+  FunctionTypeM t t' -> checkOccurence i t || checkOccurence i t'
+  UniversalTypeM t -> checkOccurence i t
+  PrimTypeBoolM -> False
+  PrimTypeIntM -> False
+  TypeConstructorM _ -> False
+  TypeApplicationM t t' -> checkOccurence i t || checkOccurence i t'
 
 addMetaType :: Either Int T.Text -> MetaType -> TypeChecker ()
 addMetaType i t = do
@@ -159,11 +143,13 @@ addMetaType i t = do
   -- We want to ensure an invariant: references between elements of the list
   -- only go from right to left.
   let t' = substMetaTypes mts t
-  if t' == TypeVariable (MetaIndex i)
-    then return () -- Could happen after substitutions, we just discard those.
-    else do
-      when (checkOccurence i t') $ throwError $ T.pack $
-        "self-referencing meta type " ++ show (i, t')
+  case t' of
+    MetaIndex i' | i == i' ->
+      return () -- Could happen after substitutions, we just discard those.
+    _ -> do
+      when (checkOccurence i t') $ throwError $
+        "self-referencing meta type ?" <> T.pack (show i)
+                                       <> " = " <> ppMetaType t'
       traceShow (i, t') $ put (n, (i, t') : mts)
 
 findMetaType :: Either Int T.Text -> TypeChecker (Maybe MetaType)
@@ -175,19 +161,27 @@ getMetaType :: Either Int T.Text -> TypeChecker MetaType
 getMetaType i = do
   mMT <- findMetaType i
   case mMT of
-    Nothing -> return $ TypeVariable $ MetaIndex i
+    Nothing -> return $ MetaIndex i
     Just mt -> return mt
 
 typeOfModule :: MonadError T.Text m => Maybe [T.Text]
              -> Environment -> Module -> m TypedModule
-typeOfModule mForeignNames env _mod =
-    either throwError return $
-      snd <$> foldM step (env, _mod & definitions .~ []) (_mod ^. definitions)
+typeOfModule mForeignNames env _mod = either throwError return $ do
+    let emptyMod = _mod & types       .~ []
+                        & definitions .~ []
+    res <- foldM typeStep (env, emptyMod) (_mod ^. types)
+    snd <$> foldM termStep res (_mod ^. definitions)
 
   where
-    step :: (Environment, TypedModule) -> Definition (Maybe Type)
-         -> Either T.Text (Environment, TypedModule)
-    step (env, typedMod) = \case
+    typeStep :: (Environment, TypedModule) -> TypeDefinition ()
+             -> Either T.Text (Environment, TypedModule)
+    typeStep (env, typedMod) def = do
+      return (env, typedMod) -- FIXME
+
+
+    termStep :: (Environment, TypedModule) -> Definition (Maybe Type)
+             -> Either T.Text (Environment, TypedModule)
+    termStep (env, typedMod) = \case
       TermDefinition name term mType -> do
         (mt, (_, mts)) <-
           runStateT (typeOf' env emptyContext term) (0, [])
@@ -202,7 +196,7 @@ typeOfModule mForeignNames env _mod =
         let env' = env & localBindings %~ ((name, typ) :)
             typedMod' =
               typedMod & definitions %~ (TermDefinition name term typ :)
-        return (env', typedMod')
+        traceShow (name, ppType typ) $ return (env', typedMod')
 
       ForeignDefinition name typ -> do
         case mForeignNames of
@@ -219,13 +213,10 @@ typeOfModule mForeignNames env _mod =
     checkMoreSpecific s g =
       void $ runStateT (unify (toMetaType s) (toMetaType g)) (0, [])
 
-    checkExport :: T.Text -> Bool
-    checkExport name = maybe True (name `elem`) (_mod ^. exports)
-
 typeOf :: Environment -> Term -> Either T.Text Type
 typeOf env term = do
   (mt, (_, mts)) <- runStateT (typeOf' env emptyContext term) (0, [])
-  traceShow (">>", mt) $ fromMetaType mts mt
+  traceShow (">>", ppMetaType mt) $ fromMetaType mts mt
 
 typeOf' :: Environment -> Context -> Term -> TypeChecker MetaType
 typeOf' env ctx t = traceShow t $ case t of
@@ -234,71 +225,69 @@ typeOf' env ctx t = traceShow t $ case t of
 
   Abstraction (Just tyIn) te -> do
     let tyIn' = toMetaType tyIn
-    tyOut <- typeOf' env (ctx & vars %~ (tyIn' :)) te
-    return $ FunctionType tyIn' tyOut
+    tyOut <- typeOf' env (tyIn' : ctx) te
+    return $ FunctionTypeM tyIn' tyOut
 
   Abstraction Nothing te -> do
     (_, tyIn) <- newMetaVar
-    let ctx' = ctx & vars %~ ((tyIn :) . map (onTypeIndex (+1)))
+    let ctx' = tyIn : map (bumpTypeIndexFrom 0) ctx
     tyOut <- typeOf' env ctx' te
-    return $ FunctionType tyIn tyOut
+    return $ FunctionTypeM tyIn tyOut
 
   Application te1 te2 -> do
     ty1 <- typeOf' env ctx te1
     ty2 <- typeOf' env ctx te2
     (i, tyU) <- newMetaVar
-    unify (FunctionType ty2 tyU) ty1
+    unify (FunctionTypeM ty2 tyU) ty1
     getMetaType $ Left i
 
   IfThenElse tec te1 te2 -> do
     tyc <- typeOf' env ctx tec
     ty1 <- typeOf' env ctx te1
     ty2 <- typeOf' env ctx te2
-    unify tyc PrimTypeBool
+    unify tyc PrimTypeBoolM
     (i, tyU) <- newMetaVar
     unify tyU ty1
     unify tyU ty2
     getMetaType $ Left i
 
-  PrimBool _ -> return PrimTypeBool
-  PrimInt _ -> return PrimTypeInt
-  Fix ->
+  PrimBool _ -> return PrimTypeBoolM
+  PrimInt _ -> return PrimTypeIntM
+  FixTerm ->
     -- fix : forall a. (a -> a) -> a
-    return (UniversalType (FunctionType
-                           (FunctionType (TypeVariable (DeBruijnIndex 0))
-                                         (TypeVariable (DeBruijnIndex 0)))
-                           (TypeVariable (DeBruijnIndex 0))))
-
--- FIXME: Unify kinds to reject more programs (e.g. fix  \f -> \x -> f x)
+    return (UniversalTypeM (FunctionTypeM
+                            (FunctionTypeM (TypeVariableM 0)
+                                           (TypeVariableM 0))
+                            (TypeVariableM 0)))
 
 -- | Unify the two given types and adapt the constraints in the state.
 -- The first given type is a subtype of the second.
 unify :: MetaType -> MetaType -> TypeChecker ()
-unify l r = traceShow (l, r) $ case (l, r) of
-    (TypeVariable i, TypeVariable i') | i == i' -> return ()
+unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
+    (TypeVariableM i, TypeVariableM i') | i == i' -> return ()
 
-    (TypeVariable (MetaIndex i), _) -> unifyMetaIndex i r
-    (_, TypeVariable (MetaIndex i)) -> unifyMetaIndex i l
+    (MetaIndex i, _) -> unifyMetaIndex i r
+    (_, MetaIndex i) -> unifyMetaIndex i l
 
-    (FunctionType tyIn tyOut, FunctionType tyIn' tyOut') -> do
+    (FunctionTypeM tyIn tyOut, FunctionTypeM tyIn' tyOut') -> do
       unify tyIn' tyIn
       unify tyOut tyOut'
 
-    (FunctionType tyIn tyOut, UniversalType ty) ->
+    (FunctionTypeM tyIn tyOut, UniversalTypeM ty) ->
       universalHelper 1 tyIn tyOut ty
 
-    (UniversalType ty1, UniversalType ty2) -> do
+    (UniversalTypeM ty1, UniversalTypeM ty2) -> do
       (_, mt1) <- newMetaVar
       (_, mt2) <- newMetaVar
       let ty1' = substDeBruijnIndex 0 [(0, mt1)] ty1
           ty2' = substDeBruijnIndex 0 [(0, mt2)] ty2
       unify ty1' ty2'
 
-    (PrimTypeBool, PrimTypeBool) -> return ()
-    (PrimTypeInt, PrimTypeInt) -> return ()
-    (TypeConstructor (NameReference n), TypeConstructor (NameReference n'))
+    (PrimTypeBoolM, PrimTypeBoolM) -> return ()
+    (PrimTypeIntM, PrimTypeIntM) -> return ()
+    (TypeConstructorM (NameReference n), TypeConstructorM (NameReference n'))
       | n == n' -> return ()
-    (TypeApplication ty1 ty1', TypeApplication ty2 ty2') -> do
+    (TypeApplicationM ty1 ty1', TypeApplicationM ty2 ty2') -> do
       unify ty1 ty1'
       unify ty2 ty2'
 
@@ -312,71 +301,63 @@ unify l r = traceShow (l, r) $ case (l, r) of
     universalHelper :: Int -> MetaType -> MetaType
                     -> MetaType -> TypeChecker ()
     universalHelper count tyIn tyOut = \case
-      UniversalType ty -> universalHelper (count+1) tyIn tyOut ty
-      FunctionType tyIn' tyOut' -> traceShow ("---", tyIn', tyOut', tyIn, tyOut) $ do
+      UniversalTypeM ty -> universalHelper (count+1) tyIn tyOut ty
+      FunctionTypeM tyIn' tyOut' -> traceShow ("---", tyIn', tyOut', tyIn, tyOut) $ do
         (tyInMono, repl) <- monomorphiseType 0 [] tyIn'
         let tyOut'' = addUniversals (count - length repl) $
                         substDeBruijnIndex 0 repl tyOut'
-        unify (FunctionType tyIn tyOut) (FunctionType tyInMono tyOut'')
+        unify (FunctionTypeM tyIn tyOut) (FunctionTypeM tyInMono tyOut'')
       mt -> do
         (_, mts) <- get
         t <- lift $ fromMetaType mts mt
         throwError $ "can't unify universal type with " <> ppType t
 
-    -- It takes a type where we already the leading UniversalType constructors,
+    -- It takes a type without the leading UniversalType constructors,
     -- replaces the type variables by meta variables and returns the newly
     -- constructed type together with the list of replacements.
     -- It does not replace type variables of other UniversalType it encounters.
     monomorphiseType :: Int -> [(Int, MetaType)] -> MetaType
                      -> TypeChecker (MetaType, [(Int, MetaType)])
     monomorphiseType threshold acc = \case
-      TypeVariable (DeBruijnIndex i)
+      t@(MetaIndex _) -> return (t, acc)
+      TypeVariableM i
         | i >= threshold ->
             case lookup i acc of
               Nothing -> do
                 (_, mvar) <- newMetaVar
                 return (mvar, [(i, mvar)])
               Just mt -> return (mt, acc)
-      t@(TypeVariable _) -> return (t, acc)
-      FunctionType t1 t2 -> do
+      FunctionTypeM t1 t2 -> do
         (t1', acc')  <- monomorphiseType threshold acc  t1
         (t2', acc'') <- monomorphiseType threshold acc' t2
-        return (FunctionType t1' t2', acc'')
-      UniversalType t -> do
+        return (FunctionTypeM t1' t2', acc'')
+      UniversalTypeM t -> do
         (t', acc') <- monomorphiseType (threshold + 1) acc t
-        return (UniversalType t', acc')
-      PrimTypeBool -> return (PrimTypeBool, acc)
-      PrimTypeInt -> return (PrimTypeInt, acc)
-      TypeConstructor ref -> return (TypeConstructor ref, acc)
-      TypeApplication t1 t2 -> do
+        return (UniversalTypeM t', acc')
+      PrimTypeBoolM -> return (PrimTypeBoolM, acc)
+      PrimTypeIntM -> return (PrimTypeIntM, acc)
+      TypeConstructorM ref -> return (TypeConstructorM ref, acc)
+      TypeApplicationM t1 t2 -> do
         (t1', acc')  <- monomorphiseType threshold acc  t1
         (t2', acc'') <- monomorphiseType threshold acc' t2
-        return (TypeApplication t1' t2', acc'')
+        return (TypeApplicationM t1' t2', acc'')
 
     addUniversals :: Int -> MetaType -> MetaType
     addUniversals 0 = id
-    addUniversals i = UniversalType . addUniversals (i-1)
+    addUniversals i = UniversalTypeM . addUniversals (i-1)
 
+    -- FIXME: simpler with a catamorphism
     substDeBruijnIndex :: Int -> [(Int, MetaType)] -> MetaType -> MetaType
-    substDeBruijnIndex base repl = \case
-      TypeVariable (DeBruijnIndex i) ->
+    substDeBruijnIndex base repl = cata $ \case
+      MetaBase (TypeVariableF i) ->
         case lookup (i - base) repl of
           Just mt -> mt
           Nothing ->
             let count = foldl (\c (i',_) -> if i' + base < i then c + 1 else 0)
                               0 repl
-            in TypeVariable (DeBruijnIndex (i - count))
-      t@(TypeVariable _) -> t
-      FunctionType t1 t2 -> FunctionType (substDeBruijnIndex base repl t1)
-                                         (substDeBruijnIndex base repl t2)
-      UniversalType t -> UniversalType $ substDeBruijnIndex (base+1) repl t
-      PrimTypeBool -> PrimTypeBool
-      PrimTypeInt -> PrimTypeInt
-      TypeConstructor ref -> TypeConstructor ref
-      TypeApplication t1 t2 -> TypeApplication (substDeBruijnIndex base repl t1)
-                                               (substDeBruijnIndex base repl t2)
+            in TypeVariableM (i - count)
+      mt -> Fix mt
 
--- FIXME: Check for self-reference
 unifyMetaIndex :: Either Int T.Text -> MetaType -> TypeChecker ()
 unifyMetaIndex i t = do
   mMT <- findMetaType i
@@ -384,10 +365,15 @@ unifyMetaIndex i t = do
     Nothing -> addMetaType i t
     Just mt -> unify mt t
 
--- | Apply a function on the De Bruijn index if any.
-onTypeIndex :: (Int -> Int) -> MetaType -> MetaType
-onTypeIndex f = \case
-  TypeVariable (DeBruijnIndex i) -> TypeVariable (DeBruijnIndex (f i))
+-- | Increase the De Bruijn indices by 1 if they are above a threshold.
+bumpTypeIndexFrom :: Int -> MetaType -> MetaType
+bumpTypeIndexFrom from = \case
+  TypeVariableM i | i >= from -> TypeVariableM (i + 1)
+  FunctionTypeM t t' ->
+    FunctionTypeM (bumpTypeIndexFrom from t) (bumpTypeIndexFrom from t')
+  UniversalTypeM t -> UniversalTypeM (bumpTypeIndexFrom (from+1) t)
+  TypeApplicationM t t' ->
+    TypeApplicationM (bumpTypeIndexFrom from t) (bumpTypeIndexFrom from t')
   t -> t
 
 typeCheckModules :: MonadError T.Text m => Maybe [T.Text] -> [Module]
@@ -417,14 +403,3 @@ typeCheckModules mForeignNames = go [] <=< reorderModules [] id
                             (acc . (_mod :)) modules
         else reorderModules (_mod ^. moduleName : dependents) acc
                             (imported ++ _mod : others)
-
-    buildGetRefType :: MonadError T.Text m => (Reference -> Maybe Type)
-                    -> [(ModuleName, [(T.Text, Type)])] -> [ModuleName]
-                    -> m (Reference -> Maybe Type)
-    buildGetRefType acc _ [] = return acc
-    buildGetRefType acc modTypes (name : names) = do
-      case lookup name modTypes of
-        Nothing -> throwError $
-          "typeCheckModules: missing module " <> T.intercalate "." name
-        Just types -> return $ \ref@(NameReference refName) ->
-          lookup refName types <|> acc ref
