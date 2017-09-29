@@ -30,7 +30,7 @@ deriveShow1 ''KindF
 type Kind = Fix KindF
 
 pattern Arrow k k' = Fix (ArrowF k k')
-pattern Star = Fix StarF
+pattern Star       = Fix StarF
 
 type MetaKind = Fix (MetaF KindF)
 

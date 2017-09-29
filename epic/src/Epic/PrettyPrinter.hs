@@ -5,6 +5,8 @@ module Epic.PrettyPrinter where
 
 import Debug.Trace
 
+import           Control.Lens
+
 import           Data.Monoid
 import qualified Data.Text as T
 
@@ -27,7 +29,13 @@ nameStream _ = go (map T.singleton alphabet)
     alphabet :: [Char]
     alphabet = "abcdefghijklmnopqrstuvwxyz"
 
+streamElem :: Int -> Stream a -> a
+streamElem 0 (Cons x _) = x
+streamElem n (Cons _ xs) = streamElem (n-1) xs
+
 -- FIXME: Remove duplication in ppType and ppMetaType
+-- FIXME: Use Data.Text.Lazy.Builder?
+-- FIXME: Precedence of type application and arrows for parentheses
 
 ppType :: Type -> T.Text
 ppType = go False (nameStream ()) []
@@ -45,7 +53,7 @@ ppType = go False (nameStream ()) []
       PrimTypeInt -> "Int"
       TypeConstructor ref -> ppReference ref
       TypeApplication t t' ->
-        let txt = go True ns names t <> " " <> go False ns names t'
+        let txt = go paren ns names t <> " " <> go True ns names t'
         in if paren then "(" <> txt <> ")" else txt
 
     universals :: [T.Text] -> Stream T.Text -> [T.Text] -> Type
@@ -75,7 +83,7 @@ ppMetaType = go False (nameStream ()) []
       PrimTypeIntM -> "Int"
       TypeConstructorM ref -> ppReference ref
       TypeApplicationM t t' ->
-        let txt = go True ns names t <> " " <> go False ns names t'
+        let txt = go paren ns names t <> " " <> go True ns names t'
         in if paren then "(" <> txt <> ")" else txt
 
     universals :: [T.Text] -> Stream T.Text -> [T.Text] -> MetaType
@@ -98,7 +106,9 @@ ppKind = go False
     go :: Bool -> Kind -> T.Text
     go paren = \case
       Star -> "*"
-      Arrow k k' -> go True k <> " -> " <> go False k'
+      Arrow k k' ->
+        let txt = go True k <> " -> " <> go False k'
+        in if paren then "(" <> txt <> ")" else txt
 
 ppMetaKind :: MetaKind -> T.Text
 ppMetaKind = go False
@@ -108,3 +118,33 @@ ppMetaKind = go False
       MetaIndex i -> "?" <> T.pack (show i)
       StarM -> "*"
       ArrowM k k' -> go True k <> " -> " <> go False k'
+
+ppModuleName :: ModuleName -> T.Text
+ppModuleName = T.intercalate "."
+
+ppTypedModule :: TypedModule -> T.Text
+ppTypedModule tmod =
+    "module " <> ppModuleName (tmod ^. moduleName)
+    <> (if null (tmod ^. types)
+          then ""
+          else "\n\n# Type definitions\n\n"
+               <> T.intercalate "\n\n"
+                    (map (ppTypeDef (nameStream ())) (tmod ^. types)))
+    <> (if null (tmod ^. definitions)
+          then ""
+          else "\n\n# Definitions\n\n"
+                <> T.unlines (map ppDef (tmod ^. definitions)))
+
+  where
+    ppTypeDef :: Stream T.Text -> TypeDefinition Kind -> T.Text
+    ppTypeDef names td =
+      let kind = foldr Arrow Star (td ^. variables)
+      in "type " <> td ^. typeName <> " : " <> ppKind kind
+         <> "\ntype " <> td ^. typeName
+         <> fst (foldl (\(acc, Cons n ns) _ -> (acc <> " " <> n, ns))
+                       ("", names) (td ^. variables))
+
+    ppDef :: Definition Type -> T.Text
+    ppDef = \case
+      TermDefinition name _ typ -> name <> " : " <> ppType typ
+      ForeignDefinition name typ -> "foreign " <> name <> " : " <> ppType typ

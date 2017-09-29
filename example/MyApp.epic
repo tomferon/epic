@@ -13,3 +13,16 @@ plusOne = flip plus 1 # Here, we use 'plus' which is defined in MyApp.Helpers
 # Because there is 'fix', we can create values which never return.
 bottom : forall a b. a -> b
 bottom = fix \f -> \x -> f x
+
+bottom' : forall a. a
+bottom' = fix \x -> x
+
+type ListF a f
+  = ConsF a f
+  | NilF
+
+type Wrapper f a = Wrapper (f a)
+
+#wrong : Wrapper Int Int -> Int
+good : Wrapper List Int -> Int
+good = \w -> 4

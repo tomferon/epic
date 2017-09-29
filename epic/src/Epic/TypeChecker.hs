@@ -109,15 +109,23 @@ fromMetaType mts mt = do
     addUniversals [] t = t
     addUniversals (_ : xs) t = UniversalType (addUniversals xs t)
 
+fromMetaKind :: [(Int, MetaKind)] -> MetaKind -> Kind
+fromMetaKind mks mk = cata phi $ substMetas mks mk
+  where
+    phi :: MetaF KindF Kind -> Kind
+    phi = \case
+      MetaIndexF _ -> Star
+      MetaBase k   -> Fix k
+
 type Context = [MetaType]
 
 emptyContext :: Context
 emptyContext = []
 
-getVariableType :: Context -> Int -> Either T.Text MetaType
-getVariableType ctx i = case ctx ^? element i of
-  Nothing -> Left "variable index out of bound"
-  Just ty -> Right ty
+getVariable :: MonadError T.Text m => [a] -> Int -> m a
+getVariable ctx i = case ctx ^? element i of
+  Nothing -> throwError "variable index out of bound"
+  Just ty -> return ty
 
 newMetaVar :: TypeChecker (Fix (MetaF f)) (Int, Fix (MetaF f))
 newMetaVar = do
@@ -178,51 +186,51 @@ getMeta i = do
 
 typeOf :: Environment -> Term -> Either T.Text Type
 typeOf env term = do
-  (mt, (_, mts)) <- runStateT (typeOf' env emptyContext term) (0, [])
-  -- FIXME: check well-kindedness
-  traceShow (">>", ppMetaType mt) $ fromMetaType mts mt
+    (mt, (_, mts)) <- runStateT (go emptyContext term) (0, [])
+    fromMetaType mts mt
 
-typeOf' :: Environment -> Context -> Term -> TypeChecker MetaType MetaType
-typeOf' env ctx t = traceShow t $ case t of
-  Variable i -> lift $ getVariableType ctx i
-  Reference ref -> toMeta <$> getRefType env ref
+  where
+    go :: Context -> Term -> TypeChecker MetaType MetaType
+    go ctx t = traceShow t $ case t of
+      Variable i -> getVariable ctx i
+      Reference ref -> toMeta <$> getRefType env ref
 
-  Abstraction (Just tyIn) te -> do
-    let tyIn' = toMeta tyIn
-    tyOut <- typeOf' env (tyIn' : ctx) te
-    return $ FunctionTypeM tyIn' tyOut
+      Abstraction (Just tyIn) te -> do
+        let tyIn' = toMeta tyIn
+        tyOut <- go (tyIn' : ctx) te
+        return $ FunctionTypeM tyIn' tyOut
 
-  Abstraction Nothing te -> do
-    (_, tyIn) <- newMetaVar
-    let ctx' = tyIn : map (bumpTypeIndexFrom 0) ctx
-    tyOut <- typeOf' env ctx' te
-    return $ FunctionTypeM tyIn tyOut
+      Abstraction Nothing te -> do
+        (_, tyIn) <- newMetaVar
+        let ctx' = tyIn : map (bumpTypeIndexFrom 0) ctx
+        tyOut <- go ctx' te
+        return $ FunctionTypeM tyIn tyOut
 
-  Application te1 te2 -> do
-    ty1 <- typeOf' env ctx te1
-    ty2 <- typeOf' env ctx te2
-    (i, tyU) <- newMetaVar
-    unify (FunctionTypeM ty2 tyU) ty1
-    getMeta i
+      Application te1 te2 -> do
+        ty1 <- go ctx te1
+        ty2 <- go ctx te2
+        (i, tyU) <- newMetaVar
+        unify (FunctionTypeM ty2 tyU) ty1
+        getMeta i
 
-  IfThenElse tec te1 te2 -> do
-    tyc <- typeOf' env ctx tec
-    ty1 <- typeOf' env ctx te1
-    ty2 <- typeOf' env ctx te2
-    unify tyc PrimTypeBoolM
-    (i, tyU) <- newMetaVar
-    unify tyU ty1
-    unify tyU ty2
-    getMeta i
+      IfThenElse tec te1 te2 -> do
+        tyc <- go ctx tec
+        ty1 <- go ctx te1
+        ty2 <- go ctx te2
+        unify tyc PrimTypeBoolM
+        (i, tyU) <- newMetaVar
+        unify tyU ty1
+        unify tyU ty2
+        getMeta i
 
-  PrimBool _ -> return PrimTypeBoolM
-  PrimInt _ -> return PrimTypeIntM
-  FixTerm ->
-    -- fix : forall a. (a -> a) -> a
-    return (UniversalTypeM (FunctionTypeM
-                            (FunctionTypeM (TypeVariableM 0)
-                                           (TypeVariableM 0))
-                            (TypeVariableM 0)))
+      PrimBool _ -> return PrimTypeBoolM
+      PrimInt _ -> return PrimTypeIntM
+      FixTerm ->
+        -- fix : forall a. (a -> a) -> a
+        return (UniversalTypeM (FunctionTypeM
+                                (FunctionTypeM (TypeVariableM 0)
+                                               (TypeVariableM 0))
+                                (TypeVariableM 0)))
 
 -- | Unify the two given types and adapt the constraints in the state.
 -- The first given type is a subtype of the second.
@@ -255,11 +263,8 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
       unify ty1 ty1'
       unify ty2 ty2'
 
-    _ -> do
-      (_, mts) <- get
-      l' <- lift $ fromMetaType mts l
-      r' <- lift $ fromMetaType mts r
-      throwError $ "can't unify type " <> ppType l' <> "\n\twith " <> ppType r'
+    _ -> throwError $
+      "can't unify type " <> ppMetaType l <> "\n\twith " <> ppMetaType r
 
   where
     universalHelper :: Int -> MetaType -> MetaType
@@ -284,13 +289,14 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
                      -> TypeChecker MetaType (MetaType, [(Int, MetaType)])
     monomorphiseType threshold acc = \case
       t@(MetaIndex _) -> return (t, acc)
-      TypeVariableM i
+      t@(TypeVariableM i)
         | i >= threshold ->
             case lookup i acc of
               Nothing -> do
                 (_, mvar) <- newMetaVar
                 return (mvar, [(i, mvar)])
               Just mt -> return (mt, acc)
+        | otherwise -> return (t, acc)
       FunctionTypeM t1 t2 -> do
         (t1', acc')  <- monomorphiseType threshold acc  t1
         (t2', acc'') <- monomorphiseType threshold acc' t2
@@ -310,7 +316,6 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
     addUniversals 0 = id
     addUniversals i = UniversalTypeM . addUniversals (i-1)
 
-    -- FIXME: simpler with a catamorphism
     substDeBruijnIndex :: Int -> [(Int, MetaType)] -> MetaType -> MetaType
     substDeBruijnIndex base repl = cata $ \case
       MetaBase (TypeVariableF i) ->
@@ -322,12 +327,12 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
             in TypeVariableM (i - count)
       mt -> Fix mt
 
-unifyMetaIndex :: Int -> MetaType -> TypeChecker MetaType ()
-unifyMetaIndex i t = do
-  mMT <- findMeta i
-  case mMT of
-    Nothing -> addMetaType i t
-    Just mt -> unify mt t
+    unifyMetaIndex :: Int -> MetaType -> TypeChecker MetaType ()
+    unifyMetaIndex i t = do
+      mMT <- findMeta i
+      case mMT of
+        Nothing -> addMetaType i t
+        Just mt -> unify mt t
 
 -- | Increase the De Bruijn indices by 1 if they are above a threshold.
 bumpTypeIndexFrom :: Int -> MetaType -> MetaType
@@ -343,14 +348,83 @@ bumpTypeIndexFrom from = \case
 kindCheckTypeDefinition :: Environment -> TypeDefinition ()
                         -> Either T.Text (TypeDefinition Kind)
 kindCheckTypeDefinition env def = do
-  undefined
+    (ks, (_, kcs)) <- flip runStateT (0, []) $ do
+      vars <- foldM (\acc _ -> (: acc) <$> newMetaVar)
+                    [] (def ^. variables)
+      mapM_ (kindCheck (Just (def ^. typeName, ownKind vars)) env
+                       (map snd vars))
+            (def ^. constructors . each . _2)
+      foldM (\acc -> fmap (: acc) . getMeta . fst) [] vars
+    return $ def & variables .~ map (fromMetaKind kcs) ks
+
+  where
+    ownKind :: [(Int, MetaKind)] -> MetaKind
+    ownKind = foldr ArrowM StarM . map snd
+
+unifyKind :: MetaKind -> MetaKind -> TypeChecker MetaKind ()
+unifyKind l r = case (l, r) of
+    (MetaIndex i, _) -> unifyMetaIndex i r
+    (_, MetaIndex i) -> unifyMetaIndex i l
+
+    (ArrowM kIn kOut, ArrowM kIn' kOut') -> do
+      unifyKind kIn  kIn'
+      unifyKind kOut kOut'
+
+    (StarM, StarM) -> return ()
+
+    _ -> throwError $
+      "can't unify kind " <> ppMetaKind l <> "\n\twith " <> ppMetaKind r
+
+  where
+    unifyMetaIndex :: Int -> MetaKind -> TypeChecker MetaKind ()
+    unifyMetaIndex i k = do
+      mMK <- findMeta i
+      case mMK of
+        Nothing -> addMetaKind i k
+        Just mk -> unifyKind mk k
+
+kindOf :: Environment -> Type -> Either T.Text Kind
+kindOf env typ = do
+  (k, (_, ks)) <- runStateT (kindCheck Nothing env [] typ) (0,[])
+  return $ fromMetaKind ks k
+
+-- | Kind check a type in a context. The first argument is used when kind
+-- checking a type definition and contains the name of the type being kind
+-- checked and its own meta kind.
+kindCheck:: Maybe (T.Text, MetaKind) -> Environment -> [MetaKind] -> Type
+         -> TypeChecker MetaKind MetaKind
+kindCheck mOwn env vars = \case
+  TypeVariable i -> getVariable vars i
+  FunctionType t t' -> do
+    k  <- kindCheck mOwn env vars t
+    k' <- kindCheck mOwn env vars t'
+    unifyKind k  StarM
+    unifyKind k' StarM
+    return StarM
+  UniversalType t -> do
+    (_, ku) <- newMetaVar
+    k <- kindCheck mOwn env (ku : vars) t
+    unifyKind k StarM
+    return StarM
+  PrimTypeBool -> return StarM
+  PrimTypeInt -> return StarM
+  TypeConstructor ref -> case (ref, mOwn) of
+    (NameReference name, Just (name', ownKind))
+      | name == name' -> return ownKind
+    _ -> toMeta <$> getRefKind env ref
+  TypeApplication t t' -> do
+    k  <- kindCheck mOwn env vars t
+    k' <- kindCheck mOwn env vars t'
+    (i, ku) <- newMetaVar
+    unifyKind k (ArrowM k' ku)
+    getMeta i
 
 typeOfModule :: MonadError T.Text m => Maybe [T.Text]
              -> Environment -> Module -> m TypedModule
-typeOfModule mForeignNames env _mod = either throwError return $ do
+typeOfModule mForeignNames initEnv _mod = either throwError return $ do
     let emptyMod = _mod & types       .~ []
                         & definitions .~ []
-    res <- foldM typeStep (env, emptyMod) (_mod ^. types)
+    res <- foldM typeStep (initEnv, emptyMod) (_mod ^. types)
     snd <$> foldM termStep res (_mod ^. definitions)
 
   where
@@ -366,15 +440,18 @@ typeOfModule mForeignNames env _mod = either throwError return $ do
              -> Either T.Text (Environment, TypedModule)
     termStep (env, typedMod) = \case
       TermDefinition name term mType -> do
-        (mt, (_, mts)) <-
-          runStateT (typeOf' env emptyContext term) (0, [])
-        inferred <- fromMetaType mts mt
-
+        inferred <- typeOf env term
         typ <- case mType of
           Nothing -> return inferred
           Just t  -> do
             checkMoreSpecific t inferred
             return t
+
+        kind <- kindOf env typ
+        case kind of
+          Star -> return ()
+          _    -> throwError $ name <> " has kind " <> ppKind kind
+                                    <> " but should have kind *"
 
         let env' = env & localBindings %~ ((name, typ) :)
             typedMod' =

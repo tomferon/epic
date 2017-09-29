@@ -3,6 +3,7 @@ import           Control.Monad.Except
 
 import           Data.List
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import           System.Directory
 import           System.Exit
@@ -13,6 +14,7 @@ import qualified Codec.Archive.Tar as Tar
 
 import           Epic.Loader
 import           Epic.Options
+import           Epic.PrettyPrinter
 import           Epic.TypeChecker
 
 main :: IO ()
@@ -22,7 +24,8 @@ main = do
 
   eRes <- runExceptT $ do
     (paths, modules) <- unzip <$> loadModules (optsBase : optsPaths) optsModules
-    typeCheckModules Nothing modules
+    tms <- typeCheckModules Nothing modules
+    liftIO $ mapM_ (T.putStrLn . ppTypedModule)  tms
     return $ map snd $ filter ((==optsBase) . fst) paths
 
   case eRes of
