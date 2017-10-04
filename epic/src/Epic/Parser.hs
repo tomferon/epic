@@ -39,6 +39,7 @@ moduleNameParser = moduleNamePart `sepBy1` char '.'
         then takeWhile1 isAlpha
         else fail "module name should be capitalised words separated by ."
 
+-- FIXME: warning for exports that don't exist
 moduleParser :: Parser Module
 moduleParser = do
     _ <- string "module"
@@ -67,7 +68,7 @@ moduleParser = do
     exports = do
       _ <- char '('
       skipSpace
-      names <- (identifier <|> operator)
+      names <- (constructor <|> identifier <|> operator)
               `sepBy` (skipSpace >> char ',' >> skipSpace)
       skipSpace
       _ <- char ')'

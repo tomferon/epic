@@ -432,42 +432,46 @@ typeOfModule mForeignNames initEnv _mod = either throwError return $ do
              -> Either T.Text (Environment, TypedModule)
     typeStep (env, typedMod) def = do
       def' <- kindCheckTypeDefinition env def
-      let env'      = env      & localTypes %~ (def' :)
-          typedMod' = typedMod & types      %~ (def' :)
+      let env' = env & localTypes %~ (def' :)
+          typedMod' = case _mod ^. exports of
+            Just names | def ^. typeName `notElem` names -> typedMod
+            _ -> typedMod & types %~ (def' :)
       traceShow (def ^. typeName, def' ^. variables) $ return (env', typedMod')
 
     termStep :: (Environment, TypedModule) -> Definition (Maybe Type)
              -> Either T.Text (Environment, TypedModule)
-    termStep (env, typedMod) = \case
-      TermDefinition name term mType -> do
-        inferred <- typeOf env term
-        typ <- case mType of
-          Nothing -> return inferred
-          Just t  -> do
-            checkMoreSpecific t inferred
-            return t
+    termStep (env, typedMod) def = do
+      (pair, def') <- case def of
+        TermDefinition name term mType -> do
+          inferred <- typeOf env term
+          typ <- case mType of
+            Nothing -> return inferred
+            Just t  -> do
+              checkMoreSpecific t inferred
+              return t
 
-        kind <- kindOf env typ
-        case kind of
-          Star -> return ()
-          _    -> throwError $ name <> " has kind " <> ppKind kind
-                                    <> " but should have kind *"
+          kind <- kindOf env typ
+          case kind of
+            Star -> return ()
+            _    -> throwError $ name <> " has kind " <> ppKind kind
+                                      <> " but should have kind *"
 
-        let env' = env & localBindings %~ ((name, typ) :)
-            typedMod' =
-              typedMod & definitions %~ (TermDefinition name term typ :)
-        traceShow (name, ppType typ) $ return (env', typedMod')
+          return ((name, typ), TermDefinition name term typ)
 
-      ForeignDefinition name typ -> do
-        case mForeignNames of
-          Just names | name `notElem` names ->
-            throwError $ "foreign value " <> name <> " not available in context"
-          _ -> return ()
+        ForeignDefinition name typ -> do
+          case mForeignNames of
+            Just names | name `notElem` names ->
+              throwError $ "foreign value " <> name
+                           <> " not available in context"
+            _ -> return ()
 
-        let env' = env & localBindings %~ ((name, typ) :)
-            typedMod' =
-              typedMod & definitions %~ (ForeignDefinition name typ :)
-        return (env', typedMod')
+          return ((name, typ), ForeignDefinition name typ)
+
+      let env' = env & localBindings %~ (pair :)
+          typedMod' = case _mod ^. exports of
+            Just names | def ^. defName `notElem` names -> typedMod
+            _ -> typedMod & definitions %~ (def' :)
+      return (env', typedMod')
 
     checkMoreSpecific :: Type -> Type -> Either T.Text ()
     checkMoreSpecific s g =
