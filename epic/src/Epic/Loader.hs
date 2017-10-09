@@ -12,6 +12,7 @@ import           System.FilePath ((</>), (<.>))
 
 import           Epic.Language hiding (name)
 import           Epic.Parser
+import           Epic.PrettyPrinter
 
 loadModules :: (MonadIO m, MonadError T.Text m) => [FilePath] -> [ModuleName]
             -> m [((FilePath, FilePath), Module)]
@@ -29,9 +30,9 @@ loadModules dirs = go []
 loadModule :: (MonadIO m, MonadError T.Text m) => [FilePath] -> ModuleName
            -> m ((FilePath, FilePath), Module)
 loadModule [] name =
-  throwError $ "can't find module " <> T.intercalate "." name
-loadModule (dir : dirs) name = do
-  let relpath = foldr (</>) "" (map T.unpack name) <.> "epic"
+  throwError $ "can't find module " <> prettyPrint name
+loadModule (dir : dirs) mname@(ModuleName names) = do
+  let relpath = foldr (</>) "" (map T.unpack names) <.> "epic"
       path = dir </> relpath
   check <- liftIO $ doesFileExist path
   if check
@@ -39,4 +40,4 @@ loadModule (dir : dirs) name = do
       contents <- liftIO $ T.readFile path
       _mod <- parseModule contents
       return ((dir, relpath), _mod)
-    else loadModule dirs name
+    else loadModule dirs mname

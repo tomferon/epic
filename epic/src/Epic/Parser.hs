@@ -20,17 +20,17 @@ import qualified Data.Text as T
 import           Epic.Language
 
 data ModulePart
-  = TermDeclaration T.Text Term
-  | TypeSignature T.Text Type
-  | ForeignImport T.Text Type
-  | TypeDeclaration (TypeDefinition ())
+  = TermDeclaration T.Text LocalTerm
+  | TypeSignature T.Text LocalType
+  | ForeignImport T.Text LocalType
+  | TypeDeclaration (TypeDefinition LocalType ())
 
 parseModule :: MonadError T.Text m => T.Text -> m Module
 parseModule =
   either (throwError . T.pack) return . parseOnly (moduleParser <* endOfInput)
 
-moduleNameParser :: Parser [T.Text]
-moduleNameParser = moduleNamePart `sepBy1` char '.'
+moduleNameParser :: Parser ModuleName
+moduleNameParser = fmap ModuleName (moduleNamePart `sepBy1` char '.')
   where
     moduleNamePart :: Parser T.Text
     moduleNamePart = do
@@ -124,7 +124,7 @@ moduleParser = do
       return $ TypeDeclaration $
         TypeDefinition name (map (const ()) params) constructors
 
-    typeCon :: T.Text -> [T.Text] -> Parser (T.Text, [Type])
+    typeCon :: T.Text -> [T.Text] -> Parser (T.Text, [LocalType])
     typeCon indent names = do
       name <- constructor
       indent' <- sep1 indent
@@ -145,9 +145,10 @@ moduleParser = do
     -- The first list of parts should not contain type signatures and the second
     -- should only contain type signatures.
     buildDecls :: ( [T.Text]
-                  , [Definition (Maybe Type)] -> [Definition (Maybe Type)] )
+                  , [Definition LocalReference (Maybe LocalType)]
+                    -> [Definition LocalReference (Maybe LocalType)] )
                -> [ModulePart] -> [ModulePart]
-               -> Parser [Definition (Maybe Type)]
+               -> Parser [Definition LocalReference (Maybe LocalType)]
     buildDecls (_, acc) [] [] = return (acc [])
     buildDecls _ [] _ = fail "signatures lack an accompanying binding"
     buildDecls (names, acc) (part : parts) sigs = case part of
@@ -178,7 +179,7 @@ moduleParser = do
           Just y  -> Just (y, g xs)
           Nothing -> go (g . (x :)) xs
 
-parseTerm :: T.Text -> Either T.Text Term
+parseTerm :: T.Text -> Either T.Text LocalTerm
 parseTerm =
   either (Left . T.pack) Right
     . parseOnly (termParser "" operators True True True [] <* endOfInput)
@@ -215,7 +216,7 @@ reservedKeywords :: [T.Text]
 reservedKeywords = ["fix", "true", "false", "if", "then", "else"]
 
 termParser :: T.Text -> [Operator] -> Bool -> Bool -> Bool -> [T.Text]
-           -> Parser Term
+           -> Parser LocalTerm
 termParser indent ops doAbs doIf doApp vars =
     (if doAbs then abstraction else empty)
     <|> (if doIf then ifthenelse else empty)
@@ -229,7 +230,7 @@ termParser indent ops doAbs doIf doApp vars =
       operation term ops <|> return term)
 
   where
-    variableOrReference :: Parser Term
+    variableOrReference :: Parser LocalTerm
     variableOrReference = do
       name <- identifier
       guard $ name `notElem` reservedKeywords
@@ -237,7 +238,7 @@ termParser indent ops doAbs doIf doApp vars =
         Nothing -> Reference $ NameReference name
         Just i  -> Variable i
 
-    abstraction :: Parser Term
+    abstraction :: Parser LocalTerm
     abstraction = do
       _ <- char '\\'
       indent' <- sep indent
@@ -248,7 +249,7 @@ termParser indent ops doAbs doIf doApp vars =
       term <- termParser indent'' operators True True True $ name : vars
       return $ Abstraction typ term
 
-    ifthenelse :: Parser Term
+    ifthenelse :: Parser LocalTerm
     ifthenelse = do
       _ <- string "if"
       indentc <- sep indent
@@ -263,7 +264,7 @@ termParser indent ops doAbs doIf doApp vars =
       t2 <- termParser indent2 operators True True True vars
       return $ IfThenElse tc t1 t2
 
-    abstractionVarType :: Parser (T.Text, Maybe Type)
+    abstractionVarType :: Parser (T.Text, Maybe LocalType)
     abstractionVarType =
       (do name <- identifier
           return (name, Nothing))
@@ -278,31 +279,31 @@ termParser indent ops doAbs doIf doApp vars =
           _ <- char ')'
           return (name, Just typ))
 
-    application :: Parser Term
+    application :: Parser LocalTerm
     application = do
       t <- termParser indent [] False False False vars
       indent' <- sep1 indent
       ts <- termParser indent [] True True False vars `sepBy1` sep1 indent'
       return $ foldl Application t ts
 
-    fix :: Parser Term
+    fix :: Parser LocalTerm
     fix = string "fix" >> return FixTerm
 
-    bool :: Parser Term
+    bool :: Parser LocalTerm
     bool = (string "true" >> return (PrimBool True))
            <|> (string "false" >> return (PrimBool False))
 
-    int :: Parser Term
+    int :: Parser LocalTerm
     int =
       ((PrimInt . read) <$> some digit)
       <|> (char '-' *> ((PrimInt . read . ('-' :)) <$> some digit))
 
-    operation :: Term -> [Operator] -> Parser Term
+    operation :: LocalTerm -> [Operator] -> Parser LocalTerm
     operation term ops = do
       parts <- (\f -> f []) <$> consumeOperations (Right term :)
       buildOpTree parts ops
 
-    buildOpTree :: [Either T.Text Term] -> [Operator] -> Parser Term
+    buildOpTree :: [Either T.Text LocalTerm] -> [Operator] -> Parser LocalTerm
     buildOpTree [Right t] _ = return t
     buildOpTree parts ops@(Operator f assoc : ops') = do
       let g    = either f (const False)
@@ -316,8 +317,10 @@ termParser indent ops doAbs doIf doApp vars =
         _ -> buildOpTree parts ops'
     buildOpTree _ _ = fail "buildOpTree: can't build operation tree"
 
-    consumeOperations :: ([Either T.Text Term] -> [Either T.Text Term])
-                      -> Parser ([Either T.Text Term] -> [Either T.Text Term])
+    consumeOperations :: ([Either T.Text LocalTerm]
+                          -> [Either T.Text LocalTerm])
+                      -> Parser ([Either T.Text LocalTerm]
+                                 -> [Either T.Text LocalTerm])
     consumeOperations acc =
       (do
         skipSpace
@@ -357,7 +360,7 @@ sep1 indent = do
   guard $ isSpace c
   sep indent
 
-typeParser :: T.Text -> Bool -> Bool -> Bool -> [T.Text] -> Parser Type
+typeParser :: T.Text -> Bool -> Bool -> Bool -> [T.Text] -> Parser LocalType
 typeParser indent doForall doFunc doApp vars = do
     (if doForall then forall else empty)
     <|> (if doFunc then function else empty)
@@ -366,7 +369,7 @@ typeParser indent doForall doFunc doApp vars = do
     <|> int <|> bool <|> typeCons <|> variable
 
   where
-    forall :: Parser Type
+    forall :: Parser LocalType
     forall = do
       _ <- string "forall"
       _ <- sep1 indent
@@ -378,44 +381,44 @@ typeParser indent doForall doFunc doApp vars = do
       typ <- typeParser indent True True True vars'
       return $ addUniversals names typ
 
-    addUniversals :: [a] -> Type -> Type
+    addUniversals :: [a] -> LocalType -> LocalType
     addUniversals [] t = t
     addUniversals (_ : xs) t = UniversalType (addUniversals xs t)
 
-    function :: Parser Type
+    function :: Parser LocalType
     function = do
       t <- typeParser indent False False True vars
       arrowSep
       ts <- typeParser indent True False True vars `sepBy1` arrowSep
       return $ mkFunctionType t ts
 
-    mkFunctionType :: Type -> [Type] -> Type
+    mkFunctionType :: LocalType -> [LocalType] -> LocalType
     mkFunctionType t = \case
       [] -> t
       [t'] -> FunctionType t t'
       t' : ts -> FunctionType t $ mkFunctionType t' ts
 
-    application :: Parser Type
+    application :: Parser LocalType
     application = do
       t <- typeParser indent False False False vars
       indent' <- sep1 indent
       ts <- typeParser indent False False False vars `sepBy1` sep1 indent'
       return $ foldl TypeApplication t ts
 
-    int :: Parser Type
+    int :: Parser LocalType
     int = string "Int" >> return PrimTypeInt
 
-    bool :: Parser Type
+    bool :: Parser LocalType
     bool = string "Bool" >> return PrimTypeBool
 
-    variable :: Parser Type
+    variable :: Parser LocalType
     variable = do
       name <- identifier
       case elemIndex name vars of
         Nothing -> fail $ "undefined type variable " ++ T.unpack name
         Just i  -> return $ TypeVariable i
 
-    typeCons :: Parser Type
+    typeCons :: Parser LocalType
     typeCons = (TypeConstructor . NameReference) <$> constructor
 
     arrowSep :: Parser ()

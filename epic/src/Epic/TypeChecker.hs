@@ -9,6 +9,7 @@ import           Control.Lens hiding (Context)
 import           Control.Monad.Except
 import           Control.Monad.State
 
+import           Data.Char (isLower)
 import           Data.Functor.Foldable
 import           Data.List
 import           Data.Monoid
@@ -22,19 +23,26 @@ import           Epic.PrettyPrinter
 data Environment = Environment
   { _typedModules  :: [TypedModule]
   , _localBindings :: [(T.Text, Type)]
-  , _localTypes    :: [TypeDefinition Kind]
+  , _localTypes    :: [TypeDefinition Type Kind]
   }
 
 makeLenses ''Environment
 
-getRefType :: MonadError T.Text m => Environment -> Reference -> m Type
+getRefType :: MonadError T.Text m => Environment -> LocalReference -> m Type
 getRefType env ref@(NameReference name) = do
   let mLocal = lookup name $ env ^. localBindings
-      mImported = findOf (typedModules . each . definitions . each)
-                         ((==name) . (^.defName)) env ^? _Just . defType
+      mImported
+        | isLower (T.head name) =
+            findOf (typedModules . each . definitions . each)
+                   ((==name) . (^.defName)) env ^? _Just . defType
+        | otherwise = undefined
+--            findOf (typedModules . each . types . each)
+--                   ((==name) . fst) env ^? _Just . _2
   case mLocal <|> mImported of
     Nothing  -> throwError $ "can't find reference " <> ppReference ref
     Just typ -> return typ
+
+getRefType env ref@(FQReference (FQRef mname name)) = undefined
 
 getRefKind :: MonadError T.Text m => Environment -> Reference -> m Kind
 getRefKind env ref@(NameReference name) = do
@@ -44,6 +52,8 @@ getRefKind env ref@(NameReference name) = do
   case mLocal <|> mImported of
     Nothing -> throwError $ "can't find reference " <> ppReference ref
     Just def -> return $ foldr Arrow Star (def ^. variables)
+
+getReKind env ref@(FQReference (FQRef mname name)) = undefined
 
 buildEnvironment :: MonadError T.Text m => [TypedModule] -> [ModuleName]
                  -> m Environment

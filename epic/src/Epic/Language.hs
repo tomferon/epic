@@ -1,19 +1,24 @@
+{-# LANGUAGE RankNTypes #-}
+
 module Epic.Language where
 
 import           Control.Lens
 
 import           Data.Eq.Deriving (deriveEq1)
 import           Data.Functor.Foldable (Fix(..))
+import           Data.List
 import qualified Data.Text as T
 
 import           Text.Show.Deriving (deriveShow1)
 
-type ModuleName = [T.Text]
+newtype ModuleName = ModuleName { unModuleName :: [T.Text] } deriving (Eq, Show)
 
-data Reference
+data LocalReference
   = NameReference T.Text
---  | FQNameReference ModuleName T.Text
+  | FQReference FQRef
   deriving (Eq, Show)
+
+data FQRef = FQRef ModuleName T.Text deriving (Eq, Show)
 
 data MetaF b f = MetaIndexF Int | MetaBase (b f) deriving (Eq, Show, Functor)
 
@@ -37,20 +42,22 @@ type MetaKind = Fix (MetaF KindF)
 pattern ArrowM k k' = Fix (MetaBase (ArrowF k k'))
 pattern StarM       = Fix (MetaBase StarF)
 
-data TypeF f
+data TypeRF r f
   = TypeVariableF Int
   | FunctionTypeF f f
   | UniversalTypeF f
   | PrimTypeBoolF
   | PrimTypeIntF
-  | TypeConstructorF Reference
+  | TypeConstructorF r
   | TypeApplicationF f f
   deriving (Eq, Show, Functor)
 
-deriveEq1 ''TypeF
-deriveShow1 ''TypeF
+deriveEq1 ''TypeRF
+deriveShow1 ''TypeRF
 
-type Type = Fix TypeF
+type TypeR r = Fix (TypeRF r)
+type LocalType = TypeR LocalReference
+type Type = TypeR FQRef
 
 pattern TypeVariable i       = Fix (TypeVariableF i)
 pattern FunctionType t t'    = Fix (FunctionTypeF t t')
@@ -60,7 +67,7 @@ pattern PrimTypeInt          = Fix PrimTypeIntF
 pattern TypeConstructor ref  = Fix (TypeConstructorF ref)
 pattern TypeApplication t t' = Fix (TypeApplicationF t t')
 
-type MetaType = Fix (MetaF TypeF)
+type MetaType r = Fix (MetaF (TypeRF r))
 
 pattern TypeVariableM i       = Fix (MetaBase (TypeVariableF i))
 pattern FunctionTypeM t t'    = Fix (MetaBase (FunctionTypeF t t'))
@@ -70,51 +77,61 @@ pattern PrimTypeIntM          = Fix (MetaBase PrimTypeIntF)
 pattern TypeConstructorM ref  = Fix (MetaBase (TypeConstructorF ref))
 pattern TypeApplicationM t t' = Fix (MetaBase (TypeApplicationF t t'))
 
-data TypeDefinition k = TypeDefinition
+data TypeDefinition t k = TypeDefinition
   { _typeName     :: T.Text
   , _variables    :: [k]
-  , _constructors :: [(T.Text, [Type])]
+  , _constructors :: [(T.Text, [t])]
   } deriving (Eq, Show)
 
 makeLenses ''TypeDefinition
 
-data TermT t
+--constructorType :: T.Text -> Getter (TypeDefinition k) (Maybe Type)
+--constructorType name f def = undefined
+--  case find ((==name) . fst) (def ^. constructors) of
+--    Nothing -> contramap (const Nothing) (f Nothing)
+--    Just (_, types) ->
+--      let final = TypeConstructor (NameReference
+--          typ = addUniversals (def ^. variables) $ foldr Arrow final types
+--      in contramap (const (Just typ)) (f (Just typ))
+
+data TermRT r t
   = Variable Int
-  | Reference Reference
-  | Abstraction (Maybe t) (TermT t)
-  | Application (TermT t) (TermT t)
-  | IfThenElse (TermT t) (TermT t) (TermT t)
+  | Reference r
+  | Abstraction (Maybe t) (TermRT r t)
+  | Application (TermRT r t) (TermRT r t)
+  | IfThenElse (TermRT r t) (TermRT r t) (TermRT r t)
   | PrimBool Bool
   | PrimInt Int
   | FixTerm
   deriving (Eq, Show)
 
-type Term = TermT Type
+type LocalTerm = TermRT LocalReference LocalType
+type Term = TermRT FQRef Type
 
-data Definition t
-  = TermDefinition T.Text Term t
-  | ForeignDefinition T.Text Type
+data Definition r t
+  = TermDefinition T.Text (TermRT r (TypeR r)) t
+  | ForeignDefinition T.Text (TypeR r)
   deriving (Eq, Show)
 
-defName :: Lens' (Definition t) T.Text
+defName :: Lens' (Definition r t) T.Text
 defName f = \case
   TermDefinition n te ty -> fmap (\n' -> TermDefinition n' te ty) (f n)
   ForeignDefinition n ty -> fmap (\n' -> ForeignDefinition n' ty) (f n)
 
-defType :: Lens' (Definition Type) Type
+defType :: Lens' (Definition r (TypeR r)) (TypeR r)
 defType f = \case
   TermDefinition n te ty -> fmap (TermDefinition n te) (f ty)
   ForeignDefinition n ty -> fmap (ForeignDefinition n) (f ty)
 
-data ModuleTK t k = Module
+data ModuleRTK r t k = Module
   { _moduleName  :: ModuleName
   , _exports     :: Maybe [T.Text]
   , _imports     :: [ModuleName]
-  , _types       :: [TypeDefinition k]
-  , _definitions :: [Definition t]
+  , _types       :: [TypeDefinition (TypeR r) k]
+  , _definitions :: [Definition r t]
   } deriving (Eq, Show)
 
-makeLenses ''ModuleTK
+makeLenses ''ModuleRTK
 
-type Module = ModuleTK (Maybe Type) ()
-type TypedModule = ModuleTK Type Kind
+type Module = ModuleRTK LocalReference (Maybe LocalType) ()
+type TypedModule = ModuleRTK FQRef Type Kind
