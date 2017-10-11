@@ -67,7 +67,7 @@ pattern PrimTypeInt          = Fix PrimTypeIntF
 pattern TypeConstructor ref  = Fix (TypeConstructorF ref)
 pattern TypeApplication t t' = Fix (TypeApplicationF t t')
 
-type MetaType r = Fix (MetaF (TypeRF r))
+type MetaType = Fix (MetaF (TypeRF FQRef))
 
 pattern TypeVariableM i       = Fix (MetaBase (TypeVariableF i))
 pattern FunctionTypeM t t'    = Fix (MetaBase (FunctionTypeF t t'))
@@ -84,15 +84,6 @@ data TypeDefinition t k = TypeDefinition
   } deriving (Eq, Show)
 
 makeLenses ''TypeDefinition
-
---constructorType :: T.Text -> Getter (TypeDefinition k) (Maybe Type)
---constructorType name f def = undefined
---  case find ((==name) . fst) (def ^. constructors) of
---    Nothing -> contramap (const Nothing) (f Nothing)
---    Just (_, types) ->
---      let final = TypeConstructor (NameReference
---          typ = addUniversals (def ^. variables) $ foldr Arrow final types
---      in contramap (const (Just typ)) (f (Just typ))
 
 data TermRT r t
   = Variable Int
@@ -134,4 +125,5 @@ data ModuleRTK r t k = Module
 makeLenses ''ModuleRTK
 
 type Module = ModuleRTK LocalReference (Maybe LocalType) ()
+type FQModule = ModuleRTK FQRef (Maybe Type) ()
 type TypedModule = ModuleRTK FQRef Type Kind

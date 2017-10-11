@@ -1,5 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
-
 module Epic.TypeChecker where
 
 import Debug.Trace
@@ -17,57 +15,9 @@ import qualified Data.Text as T
 
 import           Epic.Language
 import           Epic.PrettyPrinter
+import           Epic.Resolver
 
--- | Environment of the currently typechecked term. The typed modules are in the
--- reversed order of the import statements.
-data Environment = Environment
-  { _typedModules  :: [TypedModule]
-  , _localBindings :: [(T.Text, Type)]
-  , _localTypes    :: [TypeDefinition Type Kind]
-  }
-
-makeLenses ''Environment
-
-getRefType :: MonadError T.Text m => Environment -> LocalReference -> m Type
-getRefType env ref@(NameReference name) = do
-  let mLocal = lookup name $ env ^. localBindings
-      mImported
-        | isLower (T.head name) =
-            findOf (typedModules . each . definitions . each)
-                   ((==name) . (^.defName)) env ^? _Just . defType
-        | otherwise = undefined
---            findOf (typedModules . each . types . each)
---                   ((==name) . fst) env ^? _Just . _2
-  case mLocal <|> mImported of
-    Nothing  -> throwError $ "can't find reference " <> ppReference ref
-    Just typ -> return typ
-
-getRefType env ref@(FQReference (FQRef mname name)) = undefined
-
-getRefKind :: MonadError T.Text m => Environment -> Reference -> m Kind
-getRefKind env ref@(NameReference name) = do
-  let pred      = ((== name) . (^.typeName))
-      mLocal    = findOf (localTypes . each)                  pred env
-      mImported = findOf (typedModules . each . types . each) pred env
-  case mLocal <|> mImported of
-    Nothing -> throwError $ "can't find reference " <> ppReference ref
-    Just def -> return $ foldr Arrow Star (def ^. variables)
-
-getReKind env ref@(FQReference (FQRef mname name)) = undefined
-
-buildEnvironment :: MonadError T.Text m => [TypedModule] -> [ModuleName]
-                 -> m Environment
-buildEnvironment allModules =
-    fmap (\tms -> Environment tms [] []) . go []
-  where
-    go :: MonadError T.Text m => [TypedModule] -> [ModuleName]
-       -> m [TypedModule]
-    go acc [] = return acc
-    go acc (name : names) = do
-      case find ((== name) . _moduleName) allModules of
-        Nothing -> throwError $ "can't find module " <> T.intercalate "." name
-                                <> " when building type checking environment"
-        Just _mod -> go (_mod : acc) names -- reversed order!
+type Environment = ResolverEnvironment Type Kind
 
 type TypeChecker meta = StateT (Int, [(Int, meta)]) (Either T.Text)
 
@@ -91,7 +41,7 @@ fromMetaType mts mt = do
     return $ addUniversals indices t
 
   where
-    collectIndices :: MetaF TypeF [Int] -> [Int]
+    collectIndices :: MetaF (TypeRF r) [Int] -> [Int]
     collectIndices = \case
       MetaIndexF i -> [i]
       MetaBase (FunctionTypeF is is') -> is `union` is'
@@ -117,7 +67,7 @@ fromMetaType mts mt = do
 
     addUniversals :: [a] -> Type -> Type
     addUniversals [] t = t
-    addUniversals (_ : xs) t = UniversalType (addUniversals xs t)
+    addUniversals (_ : xs) t = addUniversals xs (UniversalType t)
 
 fromMetaKind :: [(Int, MetaKind)] -> MetaKind -> Kind
 fromMetaKind mks mk = cata phi $ substMetas mks mk
@@ -144,7 +94,7 @@ newMetaVar = do
   return (i, MetaIndex i)
 
 addMetaType :: Int -> MetaType -> TypeChecker MetaType ()
-addMetaType = addMeta checkOccurence ppMetaType
+addMetaType = addMeta checkOccurence
   where
     checkOccurence :: Int -> MetaType -> Bool
     checkOccurence i = \case
@@ -158,7 +108,7 @@ addMetaType = addMeta checkOccurence ppMetaType
       TypeApplicationM t t' -> checkOccurence i t || checkOccurence i t'
 
 addMetaKind :: Int -> MetaKind -> TypeChecker MetaKind ()
-addMetaKind = addMeta checkOccurence ppMetaKind
+addMetaKind = addMeta checkOccurence
   where
     checkOccurence :: Int -> MetaKind -> Bool
     checkOccurence i = \case
@@ -166,10 +116,9 @@ addMetaKind = addMeta checkOccurence ppMetaKind
       StarM -> False
       ArrowM k k' -> checkOccurence i k || checkOccurence i k'
 
-addMeta :: Functor f => (Int -> Fix (MetaF f) -> Bool)
-        -> (Fix (MetaF f) -> T.Text) -> Int -> Fix (MetaF f)
-        -> TypeChecker (Fix (MetaF f)) ()
-addMeta checkOccurence pp i m = do
+addMeta :: (Functor f, Pretty (Fix (MetaF f))) => (Int -> Fix (MetaF f) -> Bool)
+        -> Int -> Fix (MetaF f) -> TypeChecker (Fix (MetaF f)) ()
+addMeta checkOccurence i m = do
   (n, ms) <- get
   -- We want to ensure an invariant: references between elements of the list
   -- only go from right to left.
@@ -179,7 +128,7 @@ addMeta checkOccurence pp i m = do
       return () -- Could happen after substitutions, we just discard those.
     _ -> do
       when (checkOccurence i m') $ throwError $
-        "self-referencing ?" <> T.pack (show i) <> " = " <> pp m'
+        "self-referencing ?" <> T.pack (show i) <> " = " <> prettyPrint m'
       put (n, (i, m') : ms)
 
 findMeta :: Int -> TypeChecker meta (Maybe meta)
@@ -245,7 +194,7 @@ typeOf env term = do
 -- | Unify the two given types and adapt the constraints in the state.
 -- The first given type is a subtype of the second.
 unify :: MetaType -> MetaType -> TypeChecker MetaType ()
-unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
+unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
     (TypeVariableM i, TypeVariableM i') | i == i' -> return ()
 
     (MetaIndex i, _) -> unifyMetaIndex i r
@@ -267,14 +216,14 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
 
     (PrimTypeBoolM, PrimTypeBoolM) -> return ()
     (PrimTypeIntM, PrimTypeIntM) -> return ()
-    (TypeConstructorM (NameReference n), TypeConstructorM (NameReference n'))
-      | n == n' -> return ()
+    (TypeConstructorM ref, TypeConstructorM ref')
+      | ref == ref' -> return ()
     (TypeApplicationM ty1 ty1', TypeApplicationM ty2 ty2') -> do
       unify ty1 ty1'
       unify ty2 ty2'
 
     _ -> throwError $
-      "can't unify type " <> ppMetaType l <> "\n\twith " <> ppMetaType r
+      "can't unify type " <> prettyPrint l <> "\n\twith " <> prettyPrint r
 
   where
     universalHelper :: Int -> MetaType -> MetaType
@@ -289,7 +238,7 @@ unify l r = traceShow (ppMetaType l, ppMetaType r) $ case (l, r) of
       mt -> do
         (_, mts) <- get
         t <- lift $ fromMetaType mts mt
-        throwError $ "can't unify universal type with " <> ppType t
+        throwError $ "can't unify universal type with " <> prettyPrint t
 
     -- It takes a type without the leading UniversalType constructors,
     -- replaces the type variables by meta variables and returns the newly
@@ -355,13 +304,14 @@ bumpTypeIndexFrom from = \case
     TypeApplicationM (bumpTypeIndexFrom from t) (bumpTypeIndexFrom from t')
   t -> t
 
-kindCheckTypeDefinition :: Environment -> TypeDefinition ()
-                        -> Either T.Text (TypeDefinition Kind)
+kindCheckTypeDefinition :: Environment -> TypeDefinition Type ()
+                        -> Either T.Text (TypeDefinition Type Kind)
 kindCheckTypeDefinition env def = do
     (ks, (_, kcs)) <- flip runStateT (0, []) $ do
       vars <- foldM (\acc _ -> (: acc) <$> newMetaVar)
                     [] (def ^. variables)
-      mapM_ (kindCheck (Just (def ^. typeName, ownKind vars)) env
+      let ownRef = FQRef (env ^. localModuleName) (def ^. typeName)
+      mapM_ (kindCheck (Just (ownRef, ownKind vars)) env
                        (map snd vars))
             (def ^. constructors . each . _2)
       foldM (\acc -> fmap (: acc) . getMeta . fst) [] vars
@@ -371,28 +321,6 @@ kindCheckTypeDefinition env def = do
     ownKind :: [(Int, MetaKind)] -> MetaKind
     ownKind = foldr ArrowM StarM . map snd
 
-unifyKind :: MetaKind -> MetaKind -> TypeChecker MetaKind ()
-unifyKind l r = case (l, r) of
-    (MetaIndex i, _) -> unifyMetaIndex i r
-    (_, MetaIndex i) -> unifyMetaIndex i l
-
-    (ArrowM kIn kOut, ArrowM kIn' kOut') -> do
-      unifyKind kIn  kIn'
-      unifyKind kOut kOut'
-
-    (StarM, StarM) -> return ()
-
-    _ -> throwError $
-      "can't unify kind " <> ppMetaKind l <> "\n\twith " <> ppMetaKind r
-
-  where
-    unifyMetaIndex :: Int -> MetaKind -> TypeChecker MetaKind ()
-    unifyMetaIndex i k = do
-      mMK <- findMeta i
-      case mMK of
-        Nothing -> addMetaKind i k
-        Just mk -> unifyKind mk k
-
 kindOf :: Environment -> Type -> Either T.Text Kind
 kindOf env typ = do
   (k, (_, ks)) <- runStateT (kindCheck Nothing env [] typ) (0,[])
@@ -401,7 +329,7 @@ kindOf env typ = do
 -- | Kind check a type in a context. The first argument is used when kind
 -- checking a type definition and contains the name of the type being kind
 -- checked and its own meta kind.
-kindCheck:: Maybe (T.Text, MetaKind) -> Environment -> [MetaKind] -> Type
+kindCheck:: Maybe (FQRef, MetaKind) -> Environment -> [MetaKind] -> Type
          -> TypeChecker MetaKind MetaKind
 kindCheck mOwn env vars = \case
   TypeVariable i -> getVariable vars i
@@ -418,9 +346,8 @@ kindCheck mOwn env vars = \case
     return StarM
   PrimTypeBool -> return StarM
   PrimTypeInt -> return StarM
-  TypeConstructor ref -> case (ref, mOwn) of
-    (NameReference name, Just (name', ownKind))
-      | name == name' -> return ownKind
+  TypeConstructor ref -> case mOwn of
+    Just (ownRef, ownKind) | ref == ownRef -> return ownKind
     _ -> toMeta <$> getRefKind env ref
   TypeApplication t t' -> do
     k  <- kindCheck mOwn env vars t
@@ -429,8 +356,30 @@ kindCheck mOwn env vars = \case
     unifyKind k (ArrowM k' ku)
     getMeta i
 
+unifyKind :: MetaKind -> MetaKind -> TypeChecker MetaKind ()
+unifyKind l r = case (l, r) of
+    (MetaIndex i, _) -> unifyMetaIndex i r
+    (_, MetaIndex i) -> unifyMetaIndex i l
+
+    (ArrowM kIn kOut, ArrowM kIn' kOut') -> do
+      unifyKind kIn  kIn'
+      unifyKind kOut kOut'
+
+    (StarM, StarM) -> return ()
+
+    _ -> throwError $
+      "can't unify kind " <> prettyPrint l <> "\n\twith " <> prettyPrint r
+
+  where
+    unifyMetaIndex :: Int -> MetaKind -> TypeChecker MetaKind ()
+    unifyMetaIndex i k = do
+      mMK <- findMeta i
+      case mMK of
+        Nothing -> addMetaKind i k
+        Just mk -> unifyKind mk k
+
 typeOfModule :: MonadError T.Text m => Maybe [T.Text]
-             -> Environment -> Module -> m TypedModule
+             -> Environment -> FQModule -> m TypedModule
 typeOfModule mForeignNames initEnv _mod = either throwError return $ do
     let emptyMod = _mod & types       .~ []
                         & definitions .~ []
@@ -438,7 +387,7 @@ typeOfModule mForeignNames initEnv _mod = either throwError return $ do
     snd <$> foldM termStep res (_mod ^. definitions)
 
   where
-    typeStep :: (Environment, TypedModule) -> TypeDefinition ()
+    typeStep :: (Environment, TypedModule) -> TypeDefinition Type ()
              -> Either T.Text (Environment, TypedModule)
     typeStep (env, typedMod) def = do
       def' <- kindCheckTypeDefinition env def
@@ -448,7 +397,7 @@ typeOfModule mForeignNames initEnv _mod = either throwError return $ do
             _ -> typedMod & types %~ (def' :)
       traceShow (def ^. typeName, def' ^. variables) $ return (env', typedMod')
 
-    termStep :: (Environment, TypedModule) -> Definition (Maybe Type)
+    termStep :: (Environment, TypedModule) -> Definition FQRef (Maybe Type)
              -> Either T.Text (Environment, TypedModule)
     termStep (env, typedMod) def = do
       (pair, def') <- case def of
@@ -463,7 +412,7 @@ typeOfModule mForeignNames initEnv _mod = either throwError return $ do
           kind <- kindOf env typ
           case kind of
             Star -> return ()
-            _    -> throwError $ name <> " has kind " <> ppKind kind
+            _    -> throwError $ name <> " has kind " <> prettyPrint kind
                                       <> " but should have kind *"
 
           return ((name, typ), TermDefinition name term typ)
@@ -487,30 +436,14 @@ typeOfModule mForeignNames initEnv _mod = either throwError return $ do
     checkMoreSpecific s g =
       void $ runStateT (unify (toMeta s) (toMeta g)) (0, [])
 
-typeCheckModules :: MonadError T.Text m => Maybe [T.Text] -> [Module]
+typeCheckModules :: MonadError T.Text m => Maybe [T.Text] -> [FQModule]
                  -> m [TypedModule]
-typeCheckModules mForeignNames = go [] <=< reorderModules [] id
+typeCheckModules mForeignNames = go [] <=< reorderModules
   where
-    go :: MonadError T.Text m => [TypedModule] -> [Module] -> m [TypedModule]
+    go :: MonadError T.Text m => [TypedModule] -> [FQModule] -> m [TypedModule]
     go acc [] = return acc
     go typedModules (_mod : modules) = do
-      env <- buildEnvironment typedModules (_mod ^. imports)
+      env <- buildEnvironment typedModules (_mod ^. moduleName)
+                              (_mod ^. imports)
       typedModule <- typeOfModule mForeignNames env _mod
       go (typedModule : typedModules) modules
-
-    -- Reorder modules so that modules only depend on modules to the left.
-    reorderModules :: MonadError T.Text m => [ModuleName]
-                   -> ([Module] -> [Module]) -> [Module] -> m [Module]
-    reorderModules _ acc [] = return $ acc []
-    reorderModules dependents acc (_mod : modules) = do
-      when (anyOf (imports . traverse) (`elem` dependents) _mod) $
-        throwError "circular dependency detected"
-
-      let importNames = _mod ^. imports
-          (imported, others) =
-            partition ((`elem` importNames) . _moduleName) modules
-      if null imported
-        then reorderModules (delete (_mod ^. moduleName) dependents)
-                            (acc . (_mod :)) modules
-        else reorderModules (_mod ^. moduleName : dependents) acc
-                            (imported ++ _mod : others)

@@ -15,6 +15,7 @@ import qualified Codec.Archive.Tar as Tar
 import           Epic.Loader
 import           Epic.Options
 import           Epic.PrettyPrinter
+import           Epic.Resolver
 import           Epic.TypeChecker
 
 main :: IO ()
@@ -24,8 +25,9 @@ main = do
 
   eRes <- runExceptT $ do
     (paths, modules) <- unzip <$> loadModules (optsBase : optsPaths) optsModules
-    tms <- typeCheckModules Nothing modules
-    liftIO $ mapM_ (T.putStrLn . ppTypedModule)  tms
+    resolvedModules <- resolveModules modules
+    typedModules <- typeCheckModules Nothing resolvedModules
+    liftIO $ mapM_ (T.putStrLn . prettyPrint) typedModules
     return $ map snd $ filter ((==optsBase) . fst) paths
 
   case eRes of

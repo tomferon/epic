@@ -1,4 +1,5 @@
 module MyApp
+  ( Wrapper, List, plusOne )
 
 import MyApp.Helpers
 
@@ -21,7 +22,7 @@ type ListF a f
   = ConsF a f
   | NilF
 
-type Wrapper f a = Wrapper (f a)
+type Wrapper f a = Wrapper (List (f a))
 
 #wrong : Wrapper Int Int -> Int
 good : Wrapper List Int -> Int

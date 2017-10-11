@@ -72,11 +72,10 @@ instance Pretty r => Pretty (Fix (TypeRF r)) where
           let forallNames = foldr (\name txt -> txt <> " " <> name) "" vars
           in "forall" <> forallNames <> ". " <> go False ns names t
 
-instance Pretty r => Pretty (MetaType r) where
+instance Pretty MetaType where
   prettyPrint = go False (nameStream ()) []
     where
-      go :: Pretty r => Bool -> Stream T.Text -> [T.Text] -> MetaType r
-         -> T.Text
+      go :: Bool -> Stream T.Text -> [T.Text] -> MetaType -> T.Text
       go paren ns names = \case
         MetaIndex i -> "?" <> T.pack (show i)
         TypeVariableM i -> names !! i
@@ -93,8 +92,7 @@ instance Pretty r => Pretty (MetaType r) where
           let txt = go paren ns names t <> " " <> go True ns names t'
           in if paren then "(" <> txt <> ")" else txt
 
-      universals :: Pretty r => [T.Text] -> Stream T.Text -> [T.Text]
-                 -> MetaType r -> T.Text
+      universals :: [T.Text] -> Stream T.Text -> [T.Text] -> MetaType -> T.Text
       universals vars ns names = \case
         UniversalTypeM t ->
           let Cons name ns' = ns
@@ -147,6 +145,7 @@ instance Pretty TypedModule where
                   <> T.unlines (map ppDef (tmod ^. definitions)))
 
     where
+      -- FIXME: print constructors
       ppTypeDef :: Stream T.Text -> TypeDefinition Type Kind -> T.Text
       ppTypeDef names td =
         let kind = foldr Arrow Star (td ^. variables)
