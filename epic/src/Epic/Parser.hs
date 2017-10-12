@@ -232,7 +232,7 @@ termParser indent ops doAbs doIf doApp vars =
   where
     variableOrReference :: Parser LocalTerm
     variableOrReference = do
-      name <- identifier
+      name <- identifier <|> constructor
       guard $ name `notElem` reservedKeywords
       return $ case elemIndex name vars of
         Nothing -> Reference $ NameReference name

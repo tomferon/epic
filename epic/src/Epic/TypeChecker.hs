@@ -204,9 +204,6 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
       unify tyIn' tyIn
       unify tyOut tyOut'
 
-    (FunctionTypeM tyIn tyOut, UniversalTypeM ty) ->
-      universalHelper 1 tyIn tyOut ty
-
     (UniversalTypeM ty1, UniversalTypeM ty2) -> do
       (_, mt1) <- newMetaVar
       (_, mt2) <- newMetaVar
@@ -214,13 +211,22 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
           ty2' = substDeBruijnIndex 0 [(0, mt2)] ty2
       unify ty1' ty2'
 
+    (FunctionTypeM tyIn tyOut, UniversalTypeM ty) ->
+      universalHelper 1 tyIn tyOut ty
+
+    (ty1, UniversalTypeM ty2) -> do
+      (ty2', _) <- monomorphiseType 0 [] ty2
+      unify ty1 ty2'
+
+    -- FIXME: (UniversalTypeM ty1, ty2) -> remove potentially useless forall
+
     (PrimTypeBoolM, PrimTypeBoolM) -> return ()
     (PrimTypeIntM, PrimTypeIntM) -> return ()
     (TypeConstructorM ref, TypeConstructorM ref')
       | ref == ref' -> return ()
     (TypeApplicationM ty1 ty1', TypeApplicationM ty2 ty2') -> do
-      unify ty1 ty1'
-      unify ty2 ty2'
+      unify ty1  ty2
+      unify ty1' ty2'
 
     _ -> throwError $
       "can't unify type " <> prettyPrint l <> "\n\twith " <> prettyPrint r

@@ -27,3 +27,6 @@ type Wrapper f a = Wrapper (List (f a))
 #wrong : Wrapper Int Int -> Int
 good : Wrapper List Int -> Int
 good = \w -> 4
+
+sampleList : List Int
+sampleList = Cons 1 (Cons 2 (Cons 3 Nil))
