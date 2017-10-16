@@ -17,10 +17,6 @@ import           Epic.Language
 import           Epic.PrettyPrinter
 import           Epic.Resolver
 
-type Environment = ResolverEnvironment Type Kind
-
-type TypeChecker meta = StateT (Int, [(Int, meta)]) (Either T.Text)
-
 toMeta :: Functor f => Fix f -> Fix (MetaF f)
 toMeta = cata (Fix . MetaBase)
 
@@ -41,7 +37,7 @@ fromMetaType mts mt = do
     return $ addUniversals indices t
 
   where
-    collectIndices :: MetaF (TypeRF r) [Int] -> [Int]
+    collectIndices :: MetaF (TypePF tyref) [Int] -> [Int]
     collectIndices = \case
       MetaIndexF i -> [i]
       MetaBase (FunctionTypeF is is') -> is `union` is'
@@ -77,6 +73,9 @@ fromMetaKind mks mk = cata phi $ substMetas mks mk
       MetaIndexF _ -> Star
       MetaBase k   -> Fix k
 
+type TypeChecker meta final
+  = StateT (Int, [(Int, meta)], [((ModuleName, T.Text), final)]) (Either T.Text)
+
 type Context = [MetaType]
 
 emptyContext :: Context
@@ -87,13 +86,13 @@ getVariable ctx i = case ctx ^? element i of
   Nothing -> throwError "variable index out of bound"
   Just ty -> return ty
 
-newMetaVar :: TypeChecker (Fix (MetaF f)) (Int, Fix (MetaF f))
+newMetaVar :: TypeChecker (Fix (MetaF f)) (Fix f) (Int, Fix (MetaF f))
 newMetaVar = do
   (i, mts) <- get
   put (i + 1, mts)
   return (i, MetaIndex i)
 
-addMetaType :: Int -> MetaType -> TypeChecker MetaType ()
+addMetaType :: Int -> MetaType -> TypeChecker MetaType Type ()
 addMetaType = addMeta checkOccurence
   where
     checkOccurence :: Int -> MetaType -> Bool
@@ -143,13 +142,13 @@ getMeta i = do
     Nothing -> return $ MetaIndex i
     Just m  -> return m
 
-typeOf :: Environment -> Term -> Either T.Text Type
+typeOf :: Environment -> FQTerm -> Either T.Text (Term, Type)
 typeOf env term = do
-    (mt, (_, mts)) <- runStateT (go emptyContext term) (0, [])
-    fromMetaType mts mt
+    ((te, mt), (_, mts)) <- runStateT (go emptyContext term) (0, [])
+    (te,) <$> fromMetaType mts mt
 
   where
-    go :: Context -> Term -> TypeChecker MetaType MetaType
+    go :: Context -> FQTerm -> TypeChecker MetaType (Term, MetaType)
     go ctx t = traceShow t $ case t of
       Variable i -> getVariable ctx i
       Reference ref -> toMeta <$> getRefType env ref

@@ -43,10 +43,10 @@ streamElem n (Cons _ xs) = streamElem (n-1) xs
 -- FIXME: Use Data.Text.Lazy.Builder?
 -- FIXME: Precedence of type application and arrows for parentheses
 
-instance Pretty r => Pretty (Fix (TypeRF r)) where
+instance Pretty r => Pretty (Fix (TypePF r)) where
   prettyPrint = go False (nameStream ()) []
     where
-      go :: Pretty r => Bool -> Stream T.Text -> [T.Text] -> TypeR r -> T.Text
+      go :: Pretty r => Bool -> Stream T.Text -> [T.Text] -> TypeP r -> T.Text
       go paren ns names = \case
         TypeVariable i -> names !! i
         FunctionType t t' ->
@@ -62,7 +62,7 @@ instance Pretty r => Pretty (Fix (TypeRF r)) where
           let txt = go paren ns names t <> " " <> go True ns names t'
           in if paren then "(" <> txt <> ")" else txt
 
-      universals :: Pretty r => [T.Text] -> Stream T.Text -> [T.Text] -> TypeR r
+      universals :: Pretty r => [T.Text] -> Stream T.Text -> [T.Text] -> TypeP r
                  -> T.Text
       universals vars ns names = \case
         UniversalType t ->
@@ -73,9 +73,10 @@ instance Pretty r => Pretty (Fix (TypeRF r)) where
           in "forall" <> forallNames <> ". " <> go False ns names t
 
 instance Pretty MetaType where
-  prettyPrint = go False (nameStream ()) []
+  prettyPrint = go False (nameStream ()) [] . unMetaType
     where
-      go :: Bool -> Stream T.Text -> [T.Text] -> MetaType -> T.Text
+      go :: Bool -> Stream T.Text -> [T.Text] -> Fix (MetaF (TypePF (Ref a)))
+         -> T.Text
       go paren ns names = \case
         MetaIndex i -> "?" <> T.pack (show i)
         TypeVariableM i -> names !! i
@@ -92,7 +93,8 @@ instance Pretty MetaType where
           let txt = go paren ns names t <> " " <> go True ns names t'
           in if paren then "(" <> txt <> ")" else txt
 
-      universals :: [T.Text] -> Stream T.Text -> [T.Text] -> MetaType -> T.Text
+      universals :: [T.Text] -> Stream T.Text -> [T.Text]
+                 -> Fix (MetaF (TypePF (Ref a))) -> T.Text
       universals vars ns names = \case
         UniversalTypeM t ->
           let Cons name ns' = ns
@@ -101,13 +103,16 @@ instance Pretty MetaType where
           let forallNames = foldr (\name txt -> txt <> " " <> name) "" vars
           in "forall" <> forallNames <> ". " <> go False ns names t
 
+instance Pretty Type where
+  prettyPrint (Type typ) = prettyPrint typ
+
 instance Pretty LocalReference where
   prettyPrint = \case
     NameReference name -> name
-    FQReference ref -> prettyPrint ref
+    FQReference mname name -> prettyPrint mname <> "." <> name
 
-instance Pretty FQRef where
-  prettyPrint (FQRef mname name) = prettyPrint mname <> "." <> name
+instance Pretty (Ref a) where
+  prettyPrint (Ref mname name _) = prettyPrint mname <> "." <> name
 
 instance Pretty Kind where
   prettyPrint = go False
@@ -154,7 +159,7 @@ instance Pretty TypedModule where
            <> fst (foldl (\(acc, Cons n ns) _ -> (acc <> " " <> n, ns))
                          ("", names) (td ^. variables))
 
-      ppDef :: Definition FQRef Type -> T.Text
+      ppDef :: Definition -> T.Text
       ppDef = \case
         TermDefinition name _ typ -> name <> " : " <> prettyPrint typ
         ForeignDefinition name typ ->

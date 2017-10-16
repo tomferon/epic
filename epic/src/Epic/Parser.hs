@@ -144,11 +144,8 @@ moduleParser = do
 
     -- The first list of parts should not contain type signatures and the second
     -- should only contain type signatures.
-    buildDecls :: ( [T.Text]
-                  , [Definition LocalReference (Maybe LocalType)]
-                    -> [Definition LocalReference (Maybe LocalType)] )
-               -> [ModulePart] -> [ModulePart]
-               -> Parser [Definition LocalReference (Maybe LocalType)]
+    buildDecls :: ([T.Text], [LocalDefinition] -> [LocalDefinition])
+               -> [ModulePart] -> [ModulePart] -> Parser [LocalDefinition]
     buildDecls (_, acc) [] [] = return (acc [])
     buildDecls _ [] _ = fail "signatures lack an accompanying binding"
     buildDecls (names, acc) (part : parts) sigs = case part of
@@ -215,6 +212,8 @@ operators =
 reservedKeywords :: [T.Text]
 reservedKeywords = ["fix", "true", "false", "if", "then", "else"]
 
+-- FIXME: Fully-qualified references
+
 termParser :: T.Text -> [Operator] -> Bool -> Bool -> Bool -> [T.Text]
            -> Parser LocalTerm
 termParser indent ops doAbs doIf doApp vars =
@@ -226,17 +225,23 @@ termParser indent ops doAbs doIf doApp vars =
         <|> (char '('
              *> termParser indent operators True True True vars
              <* char ')')
-         <|> variableOrReference <|> fix <|> bool <|> int
+         <|> variableOrReference <|> constructorReference
+         <|> fix <|> bool <|> int
       operation term ops <|> return term)
 
   where
     variableOrReference :: Parser LocalTerm
     variableOrReference = do
-      name <- identifier <|> constructor
+      name <- identifier
       guard $ name `notElem` reservedKeywords
       return $ case elemIndex name vars of
         Nothing -> Reference $ NameReference name
         Just i  -> Variable i
+
+    constructorReference :: Parser LocalTerm
+    constructorReference = do
+      name <- constructor
+      return $ ConstructorReference $ NameReference name
 
     abstraction :: Parser LocalTerm
     abstraction = do

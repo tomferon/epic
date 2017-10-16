@@ -15,10 +15,10 @@ newtype ModuleName = ModuleName { unModuleName :: [T.Text] } deriving (Eq, Show)
 
 data LocalReference
   = NameReference T.Text
-  | FQReference FQRef
+  | FQReference ModuleName T.Text
   deriving (Eq, Show)
 
-data FQRef = FQRef ModuleName T.Text deriving (Eq, Show)
+data Ref a = Ref ModuleName T.Text a deriving (Eq, Show)
 
 data MetaF b f = MetaIndexF Int | MetaBase (b f) deriving (Eq, Show, Functor)
 
@@ -42,22 +42,23 @@ type MetaKind = Fix (MetaF KindF)
 pattern ArrowM k k' = Fix (MetaBase (ArrowF k k'))
 pattern StarM       = Fix (MetaBase StarF)
 
-data TypeRF r f
+data TypePF tyref f
   = TypeVariableF Int
   | FunctionTypeF f f
   | UniversalTypeF f
   | PrimTypeBoolF
   | PrimTypeIntF
-  | TypeConstructorF r
+  | TypeConstructorF tyref
   | TypeApplicationF f f
   deriving (Eq, Show, Functor)
 
-deriveEq1 ''TypeRF
-deriveShow1 ''TypeRF
+deriveEq1 ''TypePF
+deriveShow1 ''TypePF
 
-type TypeR r = Fix (TypeRF r)
-type LocalType = TypeR LocalReference
-type Type = TypeR FQRef
+type TypeP tyref = Fix (TypePF tyref)
+type LocalType = TypeP LocalReference
+newtype FQType = FQType { unFQType :: TypeP (Ref (TypeDefinition FQType ())) }
+newtype Type = Type { unType :: TypeP (Ref (TypeDefinition Type Kind)) }
 
 pattern TypeVariable i       = Fix (TypeVariableF i)
 pattern FunctionType t t'    = Fix (FunctionTypeF t t')
@@ -67,7 +68,8 @@ pattern PrimTypeInt          = Fix PrimTypeIntF
 pattern TypeConstructor ref  = Fix (TypeConstructorF ref)
 pattern TypeApplication t t' = Fix (TypeApplicationF t t')
 
-type MetaType = Fix (MetaF (TypeRF FQRef))
+newtype MetaType = MetaType
+  { unMetaType :: Fix (MetaF (TypePF (Ref (TypeDefinition Type Kind)))) }
 
 pattern TypeVariableM i       = Fix (MetaBase (TypeVariableF i))
 pattern FunctionTypeM t t'    = Fix (MetaBase (FunctionTypeF t t'))
@@ -85,45 +87,63 @@ data TypeDefinition t k = TypeDefinition
 
 makeLenses ''TypeDefinition
 
-data TermRT r t
+data TermP teref tyref ty
   = Variable Int
-  | Reference r
-  | Abstraction (Maybe t) (TermRT r t)
-  | Application (TermRT r t) (TermRT r t)
-  | IfThenElse (TermRT r t) (TermRT r t) (TermRT r t)
+  | Reference teref
+  | ConstructorReference tyref
+  | Abstraction (Maybe ty) (TermP teref tyref ty)
+  | Application (TermP teref tyref ty) (TermP teref tyref ty)
+  | IfThenElse (TermP teref tyref ty) (TermP teref tyref ty)
+               (TermP teref tyref ty)
   | PrimBool Bool
   | PrimInt Int
   | FixTerm
+  -- FIXME: | TypeAnnotation (TermP teref ty) ty
+  -- The following is impossible to construct through parsing.
+  | Constructor Int [TermP teref tyref ty] ty
   deriving (Eq, Show)
 
-type LocalTerm = TermRT LocalReference LocalType
-type Term = TermRT FQRef Type
+type LocalTerm = TermP LocalReference LocalReference LocalType
+newtype FQTerm = FQTerm
+  { unFQTerm :: TermP (Ref FQDefinition) (Ref (TypeDefinition FQType ()))
+                      FQType }
+newtype Term = Term { unTerm :: TermP (Ref Term) (Ref Term) Type }
 
-data Definition r t
-  = TermDefinition T.Text (TermRT r (TypeR r)) t
-  | ForeignDefinition T.Text (TypeR r)
+data DefinitionP teref tyref ty mty
+  = TermDefinition T.Text (TermP teref tyref ty) mty
+  | ForeignDefinition T.Text ty
   deriving (Eq, Show)
 
-defName :: Lens' (Definition r t) T.Text
+type LocalDefinition
+  = DefinitionP LocalReference LocalReference LocalType (Maybe LocalType)
+
+newtype FQDefinition = FQDefinition
+  { unFQDefinition :: DefinitionP (Ref FQDefinition)
+                                  (Ref (TypeDefinition FQType ())) FQType
+                                  (Maybe FQType) }
+
+type Definition = DefinitionP (Ref Term) (Ref Term) Type Type
+
+defName :: Lens' (DefinitionP teref tyref ty mty) T.Text
 defName f = \case
   TermDefinition n te ty -> fmap (\n' -> TermDefinition n' te ty) (f n)
   ForeignDefinition n ty -> fmap (\n' -> ForeignDefinition n' ty) (f n)
 
-defType :: Lens' (Definition r (TypeR r)) (TypeR r)
+defType :: Lens' (DefinitionP teref tyref ty ty) ty
 defType f = \case
   TermDefinition n te ty -> fmap (TermDefinition n te) (f ty)
   ForeignDefinition n ty -> fmap (ForeignDefinition n) (f ty)
 
-data ModuleRTK r t k = Module
+data ModuleP tedef tydef = Module
   { _moduleName  :: ModuleName
   , _exports     :: Maybe [T.Text]
   , _imports     :: [ModuleName]
-  , _types       :: [TypeDefinition (TypeR r) k]
-  , _definitions :: [Definition r t]
+  , _types       :: [tydef]
+  , _definitions :: [tedef]
   } deriving (Eq, Show)
 
-makeLenses ''ModuleRTK
+makeLenses ''ModuleP
 
-type Module = ModuleRTK LocalReference (Maybe LocalType) ()
-type FQModule = ModuleRTK FQRef (Maybe Type) ()
-type TypedModule = ModuleRTK FQRef Type Kind
+type Module = ModuleP LocalDefinition (TypeDefinition LocalType ())
+type FQModule = ModuleP FQDefinition (TypeDefinition FQType ())
+type TypedModule = ModuleP Definition (TypeDefinition Type Kind)
