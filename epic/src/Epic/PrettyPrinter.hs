@@ -73,7 +73,7 @@ instance Pretty r => Pretty (Fix (TypePF r)) where
           in "forall" <> forallNames <> ". " <> go False ns names t
 
 instance Pretty MetaType where
-  prettyPrint = go False (nameStream ()) [] . unMetaType
+  prettyPrint = go False (nameStream ()) []
     where
       go :: Bool -> Stream T.Text -> [T.Text] -> Fix (MetaF (TypePF (Ref a)))
          -> T.Text
@@ -161,6 +161,7 @@ instance Pretty TypedModule where
 
       ppDef :: Definition -> T.Text
       ppDef = \case
-        TermDefinition name _ typ -> name <> " : " <> prettyPrint typ
-        ForeignDefinition name typ ->
+        Definition (TermDefinition name _ typ) ->
+          name <> " : " <> prettyPrint typ
+        Definition (ForeignDefinition name typ) ->
           "foreign " <> name <> " : " <> prettyPrint typ

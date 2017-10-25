@@ -158,7 +158,7 @@ resolveDefinition env ldef = do
   def <- case ldef of
     TermDefinition name localTerm mLocalType ->
       TermDefinition name
-        <$> fmap unFQTerm (resolveTerm env localTerm)
+        <$> resolveTerm env localTerm
         <*> sequence (fmap (resolveType env) mLocalType)
 
     ForeignDefinition name localType ->
@@ -170,7 +170,7 @@ resolveDefinition env ldef = do
 
 resolveTerm :: MonadError T.Text m => ResolverEnvironment -> LocalTerm
             -> m FQTerm
-resolveTerm env = fmap FQTerm . go
+resolveTerm env = go
   where
     go :: MonadError T.Text m => LocalTerm
        -> m (TermP (Ref FQDefinition) (Ref (TypeDefinition FQType ())) FQType)

@@ -1,3 +1,5 @@
+{-# LANGUAGE Rank2Types #-}
+
 module Epic.TypeChecker where
 
 import Debug.Trace
@@ -5,6 +7,7 @@ import Debug.Trace
 import           Control.Applicative
 import           Control.Lens hiding (Context)
 import           Control.Monad.Except
+import           Control.Monad.Reader
 import           Control.Monad.State
 
 import           Data.Char (isLower)
@@ -34,7 +37,7 @@ fromMetaType mts mt = do
     let mt' = substMetas mts mt
         indices = cata collectIndices mt'
     t <- go 0 indices mt'
-    return $ addUniversals indices t
+    return $ Type $ addUniversals indices t
 
   where
     collectIndices :: MetaF (TypePF tyref) [Int] -> [Int]
@@ -45,7 +48,8 @@ fromMetaType mts mt = do
       MetaBase (TypeApplicationF is is') -> is `union` is'
       _ -> []
 
-    go :: Int -> [Int] -> MetaType -> Either T.Text Type
+    go :: Int -> [Int] -> MetaType
+       -> Either T.Text (TypeP (Ref (TypeDefinition Type Kind)))
     go base indices = \case
       MetaIndex mi ->
         case elemIndex mi indices of
@@ -61,7 +65,8 @@ fromMetaType mts mt = do
       TypeApplicationM t t' ->
         TypeApplication <$> go base indices t <*> go base indices t'
 
-    addUniversals :: [a] -> Type -> Type
+    addUniversals :: [a] -> TypeP (Ref (TypeDefinition Type Kind))
+                  -> TypeP (Ref (TypeDefinition Type Kind))
     addUniversals [] t = t
     addUniversals (_ : xs) t = addUniversals xs (UniversalType t)
 
@@ -73,27 +78,46 @@ fromMetaKind mks mk = cata phi $ substMetas mks mk
       MetaIndexF _ -> Star
       MetaBase k   -> Fix k
 
-type TypeChecker meta final
-  = StateT (Int, [(Int, meta)], [((ModuleName, T.Text), final)]) (Either T.Text)
+-- FIXME: Use Map and IntMap
 
-type Context = [MetaType]
+data TypeCheckerState = TypeCheckerState
+  { _nextMetaIndex     :: Int
+  , _typeConstraints   :: [(Int, MetaType)]
+  , _kindConstraints   :: [(Int, MetaKind)]
+  , _typedDefinitions  :: [((ModuleName, T.Text), Definition)]
+  , _kindedDefinitions :: [((ModuleName, T.Text), TypeDefinition Type Kind)]
+  }
 
-emptyContext :: Context
-emptyContext = []
+makeLenses ''TypeCheckerState
+
+emptyTypeCheckerState :: TypeCheckerState
+emptyTypeCheckerState = TypeCheckerState 0 [] [] [] []
+
+type TypeChecker = StateT TypeCheckerState (Either T.Text)
+
+withCache :: Eq a => Lens' TypeCheckerState [(a, b)] -> a -> TypeChecker b
+          -> TypeChecker b
+withCache lens k f = do
+  cache <- use lens
+  case lookup k cache of
+    Nothing -> do
+      v <- f
+      lens #%= ((k, v) :)
+      return v
+    Just v -> return v
 
 getVariable :: MonadError T.Text m => [a] -> Int -> m a
 getVariable ctx i = case ctx ^? element i of
   Nothing -> throwError "variable index out of bound"
   Just ty -> return ty
 
-newMetaVar :: TypeChecker (Fix (MetaF f)) (Fix f) (Int, Fix (MetaF f))
-newMetaVar = do
-  (i, mts) <- get
-  put (i + 1, mts)
-  return (i, MetaIndex i)
+newMetaVar :: TypeChecker (Int, Fix (MetaF f))
+newMetaVar = state $ \st ->
+  let i = st ^. nextMetaIndex
+  in ((i, MetaIndex i), st & nextMetaIndex +~ 1)
 
-addMetaType :: Int -> MetaType -> TypeChecker MetaType Type ()
-addMetaType = addMeta checkOccurence
+addMetaType :: Int -> MetaType -> TypeChecker ()
+addMetaType = addMeta checkOccurence typeConstraints
   where
     checkOccurence :: Int -> MetaType -> Bool
     checkOccurence i = \case
@@ -106,8 +130,8 @@ addMetaType = addMeta checkOccurence
       TypeConstructorM _ -> False
       TypeApplicationM t t' -> checkOccurence i t || checkOccurence i t'
 
-addMetaKind :: Int -> MetaKind -> TypeChecker MetaKind ()
-addMetaKind = addMeta checkOccurence
+addMetaKind :: Int -> MetaKind -> TypeChecker ()
+addMetaKind = addMeta checkOccurence kindConstraints
   where
     checkOccurence :: Int -> MetaKind -> Bool
     checkOccurence i = \case
@@ -116,9 +140,10 @@ addMetaKind = addMeta checkOccurence
       ArrowM k k' -> checkOccurence i k || checkOccurence i k'
 
 addMeta :: (Functor f, Pretty (Fix (MetaF f))) => (Int -> Fix (MetaF f) -> Bool)
-        -> Int -> Fix (MetaF f) -> TypeChecker (Fix (MetaF f)) ()
-addMeta checkOccurence i m = do
-  (n, ms) <- get
+        -> Lens' TypeCheckerState [(Int, Fix (MetaF f))]
+        -> Int -> Fix (MetaF f) -> TypeChecker ()
+addMeta checkOccurence lens i m = do
+  ms <- use lens
   -- We want to ensure an invariant: references between elements of the list
   -- only go from right to left.
   let m' = substMetas ms m
@@ -128,71 +153,121 @@ addMeta checkOccurence i m = do
     _ -> do
       when (checkOccurence i m') $ throwError $
         "self-referencing ?" <> T.pack (show i) <> " = " <> prettyPrint m'
-      put (n, (i, m') : ms)
+      lens #%= ((i, m') :)
 
-findMeta :: Int -> TypeChecker meta (Maybe meta)
-findMeta i = do
-  (_, ms) <- get
+findMeta :: Lens' TypeCheckerState [(Int, meta)] -> Int
+         -> TypeChecker (Maybe meta)
+findMeta lens i = do
+  ms <- use lens
   return $ lookup i ms
 
-getMeta :: Int -> TypeChecker (Fix (MetaF f)) (Fix (MetaF f))
-getMeta i = do
-  mm <- findMeta i
+findMetaType :: Int -> TypeChecker (Maybe MetaType)
+findMetaType = findMeta typeConstraints
+
+findMetaKind :: Int -> TypeChecker (Maybe MetaKind)
+findMetaKind = findMeta kindConstraints
+
+getMeta :: Lens' TypeCheckerState [(Int, Fix (MetaF f))] -> Int
+        -> TypeChecker (Fix (MetaF f))
+getMeta lens i = do
+  mm <- findMeta lens i
   case mm of
     Nothing -> return $ MetaIndex i
     Just m  -> return m
 
-typeOf :: Environment -> FQTerm -> Either T.Text (Term, Type)
-typeOf env term = do
-    ((te, mt), (_, mts)) <- runStateT (go emptyContext term) (0, [])
-    (te,) <$> fromMetaType mts mt
+getMetaType :: Int -> TypeChecker MetaType
+getMetaType = getMeta typeConstraints
+
+getMetaKind :: Int -> TypeChecker MetaKind
+getMetaKind = getMeta kindConstraints
+
+withCleanedConstraints :: TypeChecker a -> TypeChecker a
+withCleanedConstraints =
+  withStateT (\st -> st & nextMetaIndex   .~ 0
+                        & typeConstraints .~ []
+                        & kindConstraints .~ [])
+
+-- FIXME: Check that the type has kind *
+typeOfDefinition :: FQDefinition -> TypeChecker Definition
+typeOfDefinition = \case
+    FQDefinition (TermDefinition name fqterm mSig) -> do
+      (term, inferred) <- typeOf fqterm
+      finalType <- case mSig of
+        Nothing -> return inferred
+        Just sig -> do
+          (sig', _) <- kindOf sig
+          checkMoreSpecific sig' inferred
+          return sig'
+      return $ Definition $ TermDefinition name term finalType
+
+    FQDefinition (ForeignDefinition name sig) -> do
+      (typ, k) <- kindOf sig
+      return $ Definition $ ForeignDefinition name typ
 
   where
-    go :: Context -> FQTerm -> TypeChecker MetaType (Term, MetaType)
-    go ctx t = traceShow t $ case t of
-      Variable i -> getVariable ctx i
-      Reference ref -> toMeta <$> getRefType env ref
+    checkMoreSpecific :: Type -> Type -> TypeChecker ()
+    checkMoreSpecific (Type s) (Type g) = withCleanedConstraints $
+      unify (toMeta s) (toMeta g)
+
+typeOf :: FQTerm -> TypeChecker (Term, Type)
+typeOf fqterm = withCleanedConstraints $ do
+    (term, mty) <- go [] fqterm
+    constraints <- use typeConstraints
+    typ <- lift $ fromMetaType constraints mty
+    return (term, typ)
+
+  where
+    go :: [MetaType] -> FQTerm -> TypeChecker (Term, MetaType)
+    go ctx = \case
+      Variable i -> (Variable i,) <$> getVariable ctx i
+      Reference (Ref mname name fqdef) -> do
+        def@(Definition d) <- typeOfDefinition fqdef
+        return (Reference (Ref mname name def), toMeta (unType (d ^. defType)))
 
       Abstraction (Just tyIn) te -> do
-        let tyIn' = toMeta tyIn
-        tyOut <- go (tyIn' : ctx) te
-        return $ FunctionTypeM tyIn' tyOut
+        tyIn' <- toMeta . unType . fst <$> kindOf tyIn
+        (te', tyOut) <- go (tyIn' : ctx) te
+        return (Abstraction Nothing te', FunctionTypeM tyIn' tyOut)
 
       Abstraction Nothing te -> do
         (_, tyIn) <- newMetaVar
         let ctx' = tyIn : map (bumpTypeIndexFrom 0) ctx
-        tyOut <- go ctx' te
-        return $ FunctionTypeM tyIn tyOut
+        (te', tyOut) <- go ctx' te
+        return (Abstraction Nothing te', FunctionTypeM tyIn tyOut)
 
       Application te1 te2 -> do
-        ty1 <- go ctx te1
-        ty2 <- go ctx te2
+        (te1', ty1) <- go ctx te1
+        (te2', ty2) <- go ctx te2
         (i, tyU) <- newMetaVar
         unify (FunctionTypeM ty2 tyU) ty1
-        getMeta i
+        mt <- getMetaType i
+        return (Application te1' te2', mt)
 
       IfThenElse tec te1 te2 -> do
-        tyc <- go ctx tec
-        ty1 <- go ctx te1
-        ty2 <- go ctx te2
+        (tec', tyc) <- go ctx tec
+        (te1', ty1) <- go ctx te1
+        (te2', ty2) <- go ctx te2
         unify tyc PrimTypeBoolM
         (i, tyU) <- newMetaVar
         unify tyU ty1
         unify tyU ty2
-        getMeta i
+        mt <- getMetaType i
+        return (IfThenElse tec' te1' te2', mt)
 
-      PrimBool _ -> return PrimTypeBoolM
-      PrimInt _ -> return PrimTypeIntM
-      FixTerm ->
+      PrimBool b -> return (PrimBool b, PrimTypeBoolM)
+      PrimInt i -> return (PrimInt i, PrimTypeIntM)
+
+      FixTerm -> do
         -- fix : forall a. (a -> a) -> a
-        return (UniversalTypeM (FunctionTypeM
+        let mt = UniversalTypeM (FunctionTypeM
                                 (FunctionTypeM (TypeVariableM 0)
                                                (TypeVariableM 0))
-                                (TypeVariableM 0)))
+                                (TypeVariableM 0))
+        return (FixTerm, mt)
 
 -- | Unify the two given types and adapt the constraints in the state.
 -- The first given type is a subtype of the second.
-unify :: MetaType -> MetaType -> TypeChecker MetaType ()
+unify :: MetaType -> MetaType -> TypeChecker ()
 unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
     (TypeVariableM i, TypeVariableM i') | i == i' -> return ()
 
@@ -231,8 +306,7 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
       "can't unify type " <> prettyPrint l <> "\n\twith " <> prettyPrint r
 
   where
-    universalHelper :: Int -> MetaType -> MetaType
-                    -> MetaType -> TypeChecker MetaType ()
+    universalHelper :: Int -> MetaType -> MetaType -> MetaType -> TypeChecker ()
     universalHelper count tyIn tyOut = \case
       UniversalTypeM ty -> universalHelper (count+1) tyIn tyOut ty
       FunctionTypeM tyIn' tyOut' -> traceShow ("---", tyIn', tyOut', tyIn, tyOut) $ do
@@ -241,16 +315,16 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
                         substDeBruijnIndex 0 repl tyOut'
         unify (FunctionTypeM tyIn tyOut) (FunctionTypeM tyInMono tyOut'')
       mt -> do
-        (_, mts) <- get
-        t <- lift $ fromMetaType mts mt
-        throwError $ "can't unify universal type with " <> prettyPrint t
+        constraints <- use typeConstraints
+        t <- lift $ fromMetaType constraints mt
+        throwError $ "can't unify universal type with " <> prettyPrint mt
 
     -- It takes a type without the leading UniversalType constructors,
     -- replaces the type variables by meta variables and returns the newly
     -- constructed type together with the list of replacements.
     -- It does not replace type variables of other UniversalType it encounters.
     monomorphiseType :: Int -> [(Int, MetaType)] -> MetaType
-                     -> TypeChecker MetaType (MetaType, [(Int, MetaType)])
+                     -> TypeChecker (MetaType, [(Int, MetaType)])
     monomorphiseType threshold acc = \case
       t@(MetaIndex _) -> return (t, acc)
       t@(TypeVariableM i)
@@ -291,9 +365,9 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
             in TypeVariableM (i - count)
       mt -> Fix mt
 
-    unifyMetaIndex :: Int -> MetaType -> TypeChecker MetaType ()
+    unifyMetaIndex :: Int -> MetaType -> TypeChecker ()
     unifyMetaIndex i t = do
-      mMT <- findMeta i
+      mMT <- findMetaType i
       case mMT of
         Nothing -> addMetaType i t
         Just mt -> unify mt t
@@ -309,59 +383,79 @@ bumpTypeIndexFrom from = \case
     TypeApplicationM (bumpTypeIndexFrom from t) (bumpTypeIndexFrom from t')
   t -> t
 
-kindCheckTypeDefinition :: Environment -> TypeDefinition Type ()
-                        -> Either T.Text (TypeDefinition Type Kind)
-kindCheckTypeDefinition env def = do
-    (ks, (_, kcs)) <- flip runStateT (0, []) $ do
-      vars <- foldM (\acc _ -> (: acc) <$> newMetaVar)
-                    [] (def ^. variables)
-      let ownRef = FQRef (env ^. localModuleName) (def ^. typeName)
-      mapM_ (kindCheck (Just (ownRef, ownKind vars)) env
-                       (map snd vars))
-            (def ^. constructors . each . _2)
-      foldM (\acc -> fmap (: acc) . getMeta . fst) [] vars
-    return $ def & variables .~ map (fromMetaKind kcs) ks
+kindCheckTypeDefinition :: ModuleName -> TypeDefinition FQType ()
+                        -> TypeChecker (TypeDefinition Type Kind)
+kindCheckTypeDefinition mname def =
+    withCache kindedDefinitions (mname, def ^. typeName) go
 
   where
+    go :: TypeChecker (TypeDefinition Type Kind)
+    go = withCleanedConstraints $ do
+      vars <- foldM (\acc _ -> (: acc) <$> newMetaVar) [] (def ^. variables)
+      mfix $ \final ->
+        flip runReaderT (Just (mname, final, ownKind vars)) $ do
+          let ctx = map snd vars
+          def' <- forOf (constructors . each . _2 . each) def
+                        (fmap (Type . fst) . kindCheck ctx . unFQType)
+          mks <- lift $ foldM (\acc -> fmap (: acc) . getMetaKind . fst) [] vars
+          constraints <- use kindConstraints
+          return $ def' & variables .~ map (fromMetaKind constraints) mks
+
     ownKind :: [(Int, MetaKind)] -> MetaKind
     ownKind = foldr ArrowM StarM . map snd
 
-kindOf :: Environment -> Type -> Either T.Text Kind
-kindOf env typ = do
-  (k, (_, ks)) <- runStateT (kindCheck Nothing env [] typ) (0,[])
-  return $ fromMetaKind ks k
+kindOf :: FQType -> TypeChecker (Type, Kind)
+kindOf fqtype = withCleanedConstraints $ do
+  (typ, mkind) <- runReaderT (kindCheck [] (unFQType fqtype)) Nothing
+  constraints  <- use kindConstraints
+  let kind = fromMetaKind constraints mkind
+  return (Type typ, kind)
 
 -- | Kind check a type in a context. The first argument is used when kind
 -- checking a type definition and contains the name of the type being kind
 -- checked and its own meta kind.
-kindCheck:: Maybe (FQRef, MetaKind) -> Environment -> [MetaKind] -> Type
-         -> TypeChecker MetaKind MetaKind
-kindCheck mOwn env vars = \case
-  TypeVariable i -> getVariable vars i
-  FunctionType t t' -> do
-    k  <- kindCheck mOwn env vars t
-    k' <- kindCheck mOwn env vars t'
-    unifyKind k  StarM
-    unifyKind k' StarM
-    return StarM
-  UniversalType t -> do
-    (_, ku) <- newMetaVar
-    k <- kindCheck mOwn env (ku : vars) t
-    unifyKind k StarM
-    return StarM
-  PrimTypeBool -> return StarM
-  PrimTypeInt -> return StarM
-  TypeConstructor ref -> case mOwn of
-    Just (ownRef, ownKind) | ref == ownRef -> return ownKind
-    _ -> toMeta <$> getRefKind env ref
-  TypeApplication t t' -> do
-    k  <- kindCheck mOwn env vars t
-    k' <- kindCheck mOwn env vars t'
-    (i, ku) <- newMetaVar
-    unifyKind k (ArrowM k' ku)
-    getMeta i
+kindCheck :: [MetaKind] -> TypeP (Ref (TypeDefinition FQType ()))
+          -> ReaderT (Maybe (ModuleName, TypeDefinition Type Kind, MetaKind))
+                     TypeChecker
+                     (TypeP (Ref (TypeDefinition Type Kind)), MetaKind)
+kindCheck vars = \case
+  TypeVariable i -> (TypeVariable i,) <$> getVariable vars i
 
-unifyKind :: MetaKind -> MetaKind -> TypeChecker MetaKind ()
+  FunctionType fqt fqt' -> do
+    (t,  k)  <- kindCheck vars fqt
+    (t', k') <- kindCheck vars fqt'
+    lift $ unifyKind k  StarM
+    lift $ unifyKind k' StarM
+    return (FunctionType t t', StarM)
+
+  UniversalType fqt -> do
+    (_, ku) <- lift newMetaVar
+    (t, k)  <- kindCheck (ku : vars) fqt
+    lift $ unifyKind k StarM
+    return (t, StarM)
+
+  PrimTypeBool -> return (PrimTypeBool, StarM)
+  PrimTypeInt -> return (PrimTypeInt, StarM)
+
+  TypeConstructor (Ref mname name fqdef) -> do
+    mOwn <- ask
+    case mOwn of
+      Just (ownModuleName, ownDef, ownKind)
+        | ownModuleName == mname && ownDef ^. typeName == name ->
+            return (TypeConstructor (Ref mname name ownDef), ownKind)
+      _ -> do
+        def <- lift $ kindCheckTypeDefinition mname fqdef
+        let k = toMeta $ foldr Arrow Star $ def ^. variables
+        return (TypeConstructor (Ref mname name def), k)
+
+  TypeApplication fqt fqt' -> do
+    (t,  k)  <- kindCheck vars fqt
+    (t', k') <- kindCheck vars fqt'
+    (i, ku)  <- lift newMetaVar
+    lift $ unifyKind k (ArrowM k' ku)
+    (TypeApplication t t',) <$> lift (getMetaKind i)
+
+unifyKind :: MetaKind -> MetaKind -> TypeChecker ()
 unifyKind l r = case (l, r) of
     (MetaIndex i, _) -> unifyMetaIndex i r
     (_, MetaIndex i) -> unifyMetaIndex i l
@@ -376,79 +470,21 @@ unifyKind l r = case (l, r) of
       "can't unify kind " <> prettyPrint l <> "\n\twith " <> prettyPrint r
 
   where
-    unifyMetaIndex :: Int -> MetaKind -> TypeChecker MetaKind ()
+    unifyMetaIndex :: Int -> MetaKind -> TypeChecker ()
     unifyMetaIndex i k = do
-      mMK <- findMeta i
+      mMK <- findMetaKind i
       case mMK of
         Nothing -> addMetaKind i k
         Just mk -> unifyKind mk k
 
-typeOfModule :: MonadError T.Text m => Maybe [T.Text]
-             -> Environment -> FQModule -> m TypedModule
-typeOfModule mForeignNames initEnv _mod = either throwError return $ do
-    let emptyMod = _mod & types       .~ []
-                        & definitions .~ []
-    res <- foldM typeStep (initEnv, emptyMod) (_mod ^. types)
-    snd <$> foldM termStep res (_mod ^. definitions)
-
-  where
-    typeStep :: (Environment, TypedModule) -> TypeDefinition Type ()
-             -> Either T.Text (Environment, TypedModule)
-    typeStep (env, typedMod) def = do
-      def' <- kindCheckTypeDefinition env def
-      let env' = env & localTypes %~ (def' :)
-          typedMod' = case _mod ^. exports of
-            Just names | def ^. typeName `notElem` names -> typedMod
-            _ -> typedMod & types %~ (def' :)
-      traceShow (def ^. typeName, def' ^. variables) $ return (env', typedMod')
-
-    termStep :: (Environment, TypedModule) -> Definition FQRef (Maybe Type)
-             -> Either T.Text (Environment, TypedModule)
-    termStep (env, typedMod) def = do
-      (pair, def') <- case def of
-        TermDefinition name term mType -> do
-          inferred <- typeOf env term
-          typ <- case mType of
-            Nothing -> return inferred
-            Just t  -> do
-              checkMoreSpecific t inferred
-              return t
-
-          kind <- kindOf env typ
-          case kind of
-            Star -> return ()
-            _    -> throwError $ name <> " has kind " <> prettyPrint kind
-                                      <> " but should have kind *"
-
-          return ((name, typ), TermDefinition name term typ)
-
-        ForeignDefinition name typ -> do
-          case mForeignNames of
-            Just names | name `notElem` names ->
-              throwError $ "foreign value " <> name
-                           <> " not available in context"
-            _ -> return ()
-
-          return ((name, typ), ForeignDefinition name typ)
-
-      let env' = env & localBindings %~ (pair :)
-          typedMod' = case _mod ^. exports of
-            Just names | def ^. defName `notElem` names -> typedMod
-            _ -> typedMod & definitions %~ (def' :)
-      return (env', typedMod')
-
-    checkMoreSpecific :: Type -> Type -> Either T.Text ()
-    checkMoreSpecific s g =
-      void $ runStateT (unify (toMeta s) (toMeta g)) (0, [])
+typeOfModule :: Maybe [T.Text] -> FQModule -> TypeChecker TypedModule
+typeOfModule mForeignNames _mod = do
+    _mod' <- forOf (types . each) _mod
+                   (kindCheckTypeDefinition (_mod ^. moduleName))
+    forOf (definitions . each) _mod' typeOfDefinition
 
 typeCheckModules :: MonadError T.Text m => Maybe [T.Text] -> [FQModule]
                  -> m [TypedModule]
-typeCheckModules mForeignNames = go [] <=< reorderModules
-  where
-    go :: MonadError T.Text m => [TypedModule] -> [FQModule] -> m [TypedModule]
-    go acc [] = return acc
-    go typedModules (_mod : modules) = do
-      env <- buildEnvironment typedModules (_mod ^. moduleName)
-                              (_mod ^. imports)
-      typedModule <- typeOfModule mForeignNames env _mod
-      go (typedModule : typedModules) modules
+typeCheckModules mForeignNames mods = either throwError return $
+  evalStateT (reorderModules mods >>= mapM (typeOfModule mForeignNames))
+             emptyTypeCheckerState

@@ -58,7 +58,9 @@ deriveShow1 ''TypePF
 type TypeP tyref = Fix (TypePF tyref)
 type LocalType = TypeP LocalReference
 newtype FQType = FQType { unFQType :: TypeP (Ref (TypeDefinition FQType ())) }
-newtype Type = Type { unType :: TypeP (Ref (TypeDefinition Type Kind)) }
+newtype Type
+  = Type { unType :: TypeP (Ref (TypeDefinition Type Kind)) }
+  deriving (Eq, Show)
 
 pattern TypeVariable i       = Fix (TypeVariableF i)
 pattern FunctionType t t'    = Fix (FunctionTypeF t t')
@@ -68,8 +70,7 @@ pattern PrimTypeInt          = Fix PrimTypeIntF
 pattern TypeConstructor ref  = Fix (TypeConstructorF ref)
 pattern TypeApplication t t' = Fix (TypeApplicationF t t')
 
-newtype MetaType = MetaType
-  { unMetaType :: Fix (MetaF (TypePF (Ref (TypeDefinition Type Kind)))) }
+type MetaType = Fix (MetaF (TypePF (Ref (TypeDefinition Type Kind))))
 
 pattern TypeVariableM i       = Fix (MetaBase (TypeVariableF i))
 pattern FunctionTypeM t t'    = Fix (MetaBase (FunctionTypeF t t'))
@@ -104,10 +105,8 @@ data TermP teref tyref ty
   deriving (Eq, Show)
 
 type LocalTerm = TermP LocalReference LocalReference LocalType
-newtype FQTerm = FQTerm
-  { unFQTerm :: TermP (Ref FQDefinition) (Ref (TypeDefinition FQType ()))
-                      FQType }
-newtype Term = Term { unTerm :: TermP (Ref Term) (Ref Term) Type }
+type FQTerm = TermP (Ref FQDefinition) (Ref (TypeDefinition FQType ())) FQType
+type Term = TermP (Ref Definition) (Ref (TypeDefinition Type Kind)) Type
 
 data DefinitionP teref tyref ty mty
   = TermDefinition T.Text (TermP teref tyref ty) mty
@@ -122,7 +121,9 @@ newtype FQDefinition = FQDefinition
                                   (Ref (TypeDefinition FQType ())) FQType
                                   (Maybe FQType) }
 
-type Definition = DefinitionP (Ref Term) (Ref Term) Type Type
+newtype Definition = Definition
+  { unDefinition :: DefinitionP (Ref Definition)
+                                (Ref (TypeDefinition Type Kind)) Type Type }
 
 defName :: Lens' (DefinitionP teref tyref ty mty) T.Text
 defName f = \case
