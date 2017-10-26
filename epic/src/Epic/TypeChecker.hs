@@ -182,14 +182,20 @@ getMetaKind :: Int -> TypeChecker MetaKind
 getMetaKind = getMeta kindConstraints
 
 withCleanedConstraints :: TypeChecker a -> TypeChecker a
-withCleanedConstraints =
-  withStateT (\st -> st & nextMetaIndex   .~ 0
-                        & typeConstraints .~ []
-                        & kindConstraints .~ [])
+withCleanedConstraints action = do
+  st <- get
+  nextMetaIndex   #= 0
+  typeConstraints #= []
+  kindConstraints #= []
+  res <- action
+  nextMetaIndex   #= st ^. nextMetaIndex
+  typeConstraints #= st ^. typeConstraints
+  kindConstraints #= st ^. kindConstraints
+  return res
 
 -- FIXME: Check that the type has kind *
 typeOfDefinition :: FQDefinition -> TypeChecker Definition
-typeOfDefinition = \case
+typeOfDefinition fqdef = traceShow (unFQDefinition fqdef ^. defName) $ case fqdef of
     FQDefinition (TermDefinition name fqterm mSig) -> do
       (term, inferred) <- typeOf fqterm
       finalType <- case mSig of
@@ -218,11 +224,19 @@ typeOf fqterm = withCleanedConstraints $ do
 
   where
     go :: [MetaType] -> FQTerm -> TypeChecker (Term, MetaType)
-    go ctx = \case
+    go ctx fqterm = traceShow fqterm $ case fqterm of
       Variable i -> (Variable i,) <$> getVariable ctx i
+
       Reference (Ref mname name fqdef) -> do
         def@(Definition d) <- typeOfDefinition fqdef
         return (Reference (Ref mname name def), toMeta (unType (d ^. defType)))
+
+      ConstructorReference (Ref mname name fqdef) cname -> do
+        def <- kindCheckTypeDefinition mname fqdef
+        ty  <- constructorType mname def cname
+        traceShow ("constructor:", cname, ty) $ do
+         return ( ConstructorReference (Ref mname name def) cname
+               , toMeta (unType ty) )
 
       Abstraction (Just tyIn) te -> do
         tyIn' <- toMeta . unType . fst <$> kindOf tyIn
@@ -264,6 +278,8 @@ typeOf fqterm = withCleanedConstraints $ do
                                                (TypeVariableM 0))
                                 (TypeVariableM 0))
         return (FixTerm, mt)
+
+      Constructor _ _ _ -> error "typeOf: the impossible happened"
 
 -- | Unify the two given types and adapt the constraints in the state.
 -- The first given type is a subtype of the second.
@@ -311,7 +327,7 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
       UniversalTypeM ty -> universalHelper (count+1) tyIn tyOut ty
       FunctionTypeM tyIn' tyOut' -> traceShow ("---", tyIn', tyOut', tyIn, tyOut) $ do
         (tyInMono, repl) <- monomorphiseType 0 [] tyIn'
-        let tyOut'' = addUniversals (count - length repl) $
+        let tyOut'' = addUniversals (count - length repl) $ traceShow ("substDeBruijnIndex", 0, repl, tyOut') $
                         substDeBruijnIndex 0 repl tyOut'
         unify (FunctionTypeM tyIn tyOut) (FunctionTypeM tyInMono tyOut'')
       mt -> do
@@ -332,7 +348,7 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
             case lookup i acc of
               Nothing -> do
                 (_, mvar) <- newMetaVar
-                return (mvar, [(i, mvar)])
+                return (mvar, (i, mvar) : acc)
               Just mt -> return (mt, acc)
         | otherwise -> return (t, acc)
       FunctionTypeM t1 t2 -> do
@@ -383,6 +399,28 @@ bumpTypeIndexFrom from = \case
     TypeApplicationM (bumpTypeIndexFrom from t) (bumpTypeIndexFrom from t')
   t -> t
 
+constructorType :: ModuleName -> TypeDefinition Type Kind -> T.Text
+                -> TypeChecker Type
+constructorType mname def cname = case lookup cname (def ^. constructors) of
+    Nothing -> throwError $ "can't find constructor " <> cname
+    Just types -> do
+      let tyConstr  = TypeConstructor (Ref mname (def ^. typeName) def)
+      let finalType = mkFinalType tyConstr (def ^. variables) 0
+      return $ Type $ addUniversals (def ^. variables) $
+        foldr (FunctionType . unType) finalType types
+
+  where
+    mkFinalType :: TypeP (Ref (TypeDefinition Type Kind)) -> [a] -> Int
+                -> TypeP (Ref (TypeDefinition Type Kind))
+    mkFinalType acc [] _ = acc
+    mkFinalType acc (_:vars) n =
+      mkFinalType (TypeApplication acc (TypeVariable n)) vars (n+1)
+
+    addUniversals :: [a] -> TypeP (Ref (TypeDefinition Type Kind))
+                  -> TypeP (Ref (TypeDefinition Type Kind))
+    addUniversals [] t = t
+    addUniversals (_ : xs) t = addUniversals xs (UniversalType t)
+
 kindCheckTypeDefinition :: ModuleName -> TypeDefinition FQType ()
                         -> TypeChecker (TypeDefinition Type Kind)
 kindCheckTypeDefinition mname def =
@@ -392,8 +430,9 @@ kindCheckTypeDefinition mname def =
     go :: TypeChecker (TypeDefinition Type Kind)
     go = withCleanedConstraints $ do
       vars <- foldM (\acc _ -> (: acc) <$> newMetaVar) [] (def ^. variables)
-      mfix $ \final ->
-        flip runReaderT (Just (mname, final, ownKind vars)) $ do
+      mfix $ \final -> do
+        let tuple = (mname, def ^. typeName, final, ownKind vars)
+        flip runReaderT (Just tuple) $ do
           let ctx = map snd vars
           def' <- forOf (constructors . each . _2 . each) def
                         (fmap (Type . fst) . kindCheck ctx . unFQType)
@@ -415,7 +454,8 @@ kindOf fqtype = withCleanedConstraints $ do
 -- checking a type definition and contains the name of the type being kind
 -- checked and its own meta kind.
 kindCheck :: [MetaKind] -> TypeP (Ref (TypeDefinition FQType ()))
-          -> ReaderT (Maybe (ModuleName, TypeDefinition Type Kind, MetaKind))
+          -> ReaderT (Maybe ( ModuleName, T.Text
+                            , TypeDefinition Type Kind, MetaKind ))
                      TypeChecker
                      (TypeP (Ref (TypeDefinition Type Kind)), MetaKind)
 kindCheck vars = \case
@@ -432,7 +472,7 @@ kindCheck vars = \case
     (_, ku) <- lift newMetaVar
     (t, k)  <- kindCheck (ku : vars) fqt
     lift $ unifyKind k StarM
-    return (t, StarM)
+    return (UniversalType t, StarM)
 
   PrimTypeBool -> return (PrimTypeBool, StarM)
   PrimTypeInt -> return (PrimTypeInt, StarM)
@@ -440,8 +480,8 @@ kindCheck vars = \case
   TypeConstructor (Ref mname name fqdef) -> do
     mOwn <- ask
     case mOwn of
-      Just (ownModuleName, ownDef, ownKind)
-        | ownModuleName == mname && ownDef ^. typeName == name ->
+      Just (ownModuleName, ownName, ownDef, ownKind)
+        | ownModuleName == mname && ownName == name ->
             return (TypeConstructor (Ref mname name ownDef), ownKind)
       _ -> do
         def <- lift $ kindCheckTypeDefinition mname fqdef

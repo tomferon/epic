@@ -18,7 +18,13 @@ data LocalReference
   | FQReference ModuleName T.Text
   deriving (Eq, Show)
 
-data Ref a = Ref ModuleName T.Text a deriving (Eq, Show)
+data Ref a = Ref ModuleName T.Text a
+
+instance Eq (Ref a) where
+  Ref mname name _ == Ref mname' name' _ = mname == mname' && name == name'
+
+instance Show (Ref a) where
+  show (Ref mname name _) = "(Ref (" ++ show mname ++ ") " ++ show name ++ " _)"
 
 data MetaF b f = MetaIndexF Int | MetaBase (b f) deriving (Eq, Show, Functor)
 
@@ -56,8 +62,13 @@ deriveEq1 ''TypePF
 deriveShow1 ''TypePF
 
 type TypeP tyref = Fix (TypePF tyref)
+
 type LocalType = TypeP LocalReference
-newtype FQType = FQType { unFQType :: TypeP (Ref (TypeDefinition FQType ())) }
+
+newtype FQType
+  = FQType { unFQType :: TypeP (Ref (TypeDefinition FQType ())) }
+  deriving (Eq, Show)
+
 newtype Type
   = Type { unType :: TypeP (Ref (TypeDefinition Type Kind)) }
   deriving (Eq, Show)
@@ -91,7 +102,7 @@ makeLenses ''TypeDefinition
 data TermP teref tyref ty
   = Variable Int
   | Reference teref
-  | ConstructorReference tyref
+  | ConstructorReference tyref T.Text
   | Abstraction (Maybe ty) (TermP teref tyref ty)
   | Application (TermP teref tyref ty) (TermP teref tyref ty)
   | IfThenElse (TermP teref tyref ty) (TermP teref tyref ty)
@@ -119,11 +130,13 @@ type LocalDefinition
 newtype FQDefinition = FQDefinition
   { unFQDefinition :: DefinitionP (Ref FQDefinition)
                                   (Ref (TypeDefinition FQType ())) FQType
-                                  (Maybe FQType) }
+                                  (Maybe FQType)
+  } deriving (Eq, Show)
 
 newtype Definition = Definition
   { unDefinition :: DefinitionP (Ref Definition)
-                                (Ref (TypeDefinition Type Kind)) Type Type }
+                                (Ref (TypeDefinition Type Kind)) Type Type
+  } deriving (Eq, Show)
 
 defName :: Lens' (DefinitionP teref tyref ty mty) T.Text
 defName f = \case

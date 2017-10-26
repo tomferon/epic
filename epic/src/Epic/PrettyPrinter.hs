@@ -48,7 +48,9 @@ instance Pretty r => Pretty (Fix (TypePF r)) where
     where
       go :: Pretty r => Bool -> Stream T.Text -> [T.Text] -> TypeP r -> T.Text
       go paren ns names = \case
-        TypeVariable i -> names !! i
+        TypeVariable i -> case names ^? element i of
+          Nothing -> "#" <> T.pack (show i) -- if this shows, there is a bug
+          Just n  -> n
         FunctionType t t' ->
           let txt = go True ns names t <> " -> " <> go False ns names t'
           in if paren then "(" <> txt <> ")" else txt
@@ -73,13 +75,15 @@ instance Pretty r => Pretty (Fix (TypePF r)) where
           in "forall" <> forallNames <> ". " <> go False ns names t
 
 instance Pretty MetaType where
-  prettyPrint = go False (nameStream ()) []
+  prettyPrint = go False (nameStream ()) [] . traceShowId
     where
       go :: Bool -> Stream T.Text -> [T.Text] -> Fix (MetaF (TypePF (Ref a)))
          -> T.Text
       go paren ns names = \case
         MetaIndex i -> "?" <> T.pack (show i)
-        TypeVariableM i -> names !! i
+        TypeVariableM i -> case names ^? element i of
+          Nothing -> "#" <> T.pack (show i)
+          Just n  -> n
         FunctionTypeM t t' ->
           let txt = go True ns names t <> " -> " <> go False ns names t'
           in if paren then "(" <> txt <> ")" else txt
@@ -137,7 +141,7 @@ instance Pretty ModuleName where
   prettyPrint = T.intercalate "." . unModuleName
 
 instance Pretty TypedModule where
-  prettyPrint tmod =
+  prettyPrint tmod = traceShow tmod $
       "module " <> prettyPrint (tmod ^. moduleName)
       <> (if null (tmod ^. types)
             then ""

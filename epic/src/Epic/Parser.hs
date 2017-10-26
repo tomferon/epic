@@ -241,7 +241,7 @@ termParser indent ops doAbs doIf doApp vars =
     constructorReference :: Parser LocalTerm
     constructorReference = do
       name <- constructor
-      return $ ConstructorReference $ NameReference name
+      return $ ConstructorReference (NameReference name) name
 
     abstraction :: Parser LocalTerm
     abstraction = do

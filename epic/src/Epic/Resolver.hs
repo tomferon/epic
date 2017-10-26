@@ -177,8 +177,9 @@ resolveTerm env = go
     go = \case
       Variable i -> return $ Variable i
       Reference ref -> Reference <$> resolveReference env ref
-      ConstructorReference ref ->
+      ConstructorReference ref name ->
         ConstructorReference <$> resolveConstructorReference env ref
+                             <*> pure name
       Abstraction mLocalType t -> do
         Abstraction <$> sequence (fmap (resolveType env) mLocalType)
                     <*> go t
