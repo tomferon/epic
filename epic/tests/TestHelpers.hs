@@ -2,22 +2,43 @@
 
 module TestHelpers
   ( module TestHelpers
+  , module Hedgehog
   , module Test.Tasty
-  , module Test.Tasty.Hspec
-  , module Test.Tasty.QuickCheck
+  , module Test.Tasty.HUnit
+  , module Test.Tasty.Hedgehog
   ) where
 
-import Test.QuickCheck
-import Test.Tasty
-import Test.Tasty.Hspec
-import Test.Tasty.QuickCheck
+import qualified Data.Text as T
 
-import Epic.Language
+import           Hedgehog hiding (assert)
+import           Test.Tasty
+import           Test.Tasty.HUnit
+import           Test.Tasty.Hedgehog
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Range
 
-instance Arbitrary Type where
-  arbitrary = oneof
-    [ TypeVariable <$> arbitrary
-    , FunctionType <$> arbitrary <*> arbitrary
-    , UniversalType <$> arbitrary
-    , return PrimTypeInt
-    ]
+import           Epic.Language
+
+identifierGen :: Gen T.Text
+identifierGen = do
+  fc   <- Gen.lower
+  rest <- Gen.text (Range.linear 0 10) $
+    Gen.frequency [(9, Gen.alphaNum), (1, return '_')]
+  return $ T.cons fc rest
+
+constructorGen :: Gen T.Text
+constructorGen = do
+  fc   <- Gen.upper
+  rest <- Gen.text (Range.linear 0 10) $
+    Gen.frequency [(9, Gen.alphaNum), (1, return '_')]
+  return $ T.cons fc rest
+
+moduleNameGen :: Gen ModuleName
+moduleNameGen =
+    ModuleName <$> Gen.list (Range.constant 1 5) partsGen
+  where
+    partsGen :: Gen T.Text
+    partsGen = do
+      fc   <- Gen.upper
+      rest <- Gen.text (Range.linear 0 10) Gen.alpha
+      return $ T.cons fc rest

@@ -99,6 +99,16 @@ data TypeDefinition t k = TypeDefinition
 
 makeLenses ''TypeDefinition
 
+data PatternP tyref
+  = ConstructorPattern tyref T.Text [PatternP tyref]
+  | VariablePattern T.Text
+  | WildcardPattern
+  deriving (Eq, Show)
+
+type LocalPattern = PatternP LocalReference
+type FQPattern = PatternP (Ref (TypeDefinition FQType ()))
+type Pattern = PatternP (Ref (TypeDefinition Type Kind))
+
 data TermP teref tyref ty
   = Variable Int
   | Reference teref
@@ -107,6 +117,7 @@ data TermP teref tyref ty
   | Application (TermP teref tyref ty) (TermP teref tyref ty)
   | IfThenElse (TermP teref tyref ty) (TermP teref tyref ty)
                (TermP teref tyref ty)
+  | PatternMatch (TermP teref tyref ty) [(PatternP tyref, TermP teref tyref ty)]
   | PrimBool Bool
   | PrimInt Int
   | FixTerm

@@ -30,3 +30,12 @@ good = \w -> 4
 
 sampleList : List Int
 sampleList = Cons 1 (Cons 2 (Cons 3 Nil))
+
+type Option a
+  = Some a
+  | None
+
+head : forall a. List Int -> Option a
+head = \l -> match l with
+  Cons _ _ -> None
+  Nil -> None

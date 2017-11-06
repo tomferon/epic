@@ -180,15 +180,30 @@ resolveTerm env = go
       ConstructorReference ref name ->
         ConstructorReference <$> resolveConstructorReference env ref
                              <*> pure name
-      Abstraction mLocalType t -> do
+      Abstraction mLocalType t ->
         Abstraction <$> sequence (fmap (resolveType env) mLocalType)
                     <*> go t
       Application t t' -> Application <$> go t <*> go t'
       IfThenElse t t' t'' -> IfThenElse <$> go t <*> go t' <*> go t''
+      PatternMatch t branches ->
+        PatternMatch <$> go t
+                     <*> mapM (\(pat, t') -> (,) <$> resolvePattern env pat
+                                             <*> go t')
+                              branches
       PrimBool b -> return $ PrimBool b
       PrimInt i -> return $ PrimInt i
       FixTerm -> return FixTerm
       Constructor i _ ty -> Constructor i [] <$> resolveType env ty
+
+resolvePattern :: MonadError T.Text m => ResolverEnvironment -> LocalPattern
+               -> m FQPattern
+resolvePattern env = \case
+  WildcardPattern -> return WildcardPattern
+  VariablePattern name -> return $ VariablePattern name
+  ConstructorPattern ref name patterns -> do
+    ref'      <- resolveConstructorReference env ref
+    patterns' <- mapM (resolvePattern env) patterns
+    return $ ConstructorPattern ref' name patterns'
 
 resolveReference :: MonadError T.Text m => ResolverEnvironment -> LocalReference
                  -> m (Ref FQDefinition)
@@ -228,14 +243,14 @@ resolveConstructorReference env lref = do
                 typ <- env ^. localTypes
                 cname <- typ ^.. constructors . each . _1
                 guard $ cname == name
-                return $ Ref (env ^. localModuleName) name typ
+                return $ Ref (env ^. localModuleName) (typ ^. typeName) typ
 
               mImported = listToMaybe $ do
                 _mod  <- env ^. importedModules
                 typ   <- _mod ^. types
                 cname <- typ ^.. constructors . each . _1
                 guard $ cname == name
-                return $ Ref (_mod ^. moduleName) name typ
+                return $ Ref (_mod ^. moduleName) (typ ^. typeName) typ
 
           in mLocal <|> mImported
 
@@ -245,7 +260,7 @@ resolveConstructorReference env lref = do
           typ <- _mod ^. types
           cname <- typ ^.. constructors . each . _1
           guard $ cname == name
-          return $ Ref mname name typ
+          return $ Ref mname (typ ^. typeName) typ
 
   case mDef of
     Nothing  -> throwError $ "can't find reference " <> prettyPrint lref
@@ -272,86 +287,3 @@ reorderModules = go id []
                                  modules
         else go acc (_mod ^. moduleName : dependents)
                     (imported ++ _mod : others)
-
---getRefType :: MonadError T.Text m => ResolverEnvironment Type k -> Ref a
---           -> m Type
---getRefType env ref@(Ref mname name _) = undefined
-{-  if env ^. localModuleName == mname
-    then do
-      let mType = if isUpper (T.head name)
-            then listToMaybe $ do
-              typ <- env ^. localTypes
-              (constr, paramTypes) <- typ ^. constructors
-              guard $ constr == name
-              return $ constructorType mname (typ ^. typeName)
-                                       (typ ^. variables) paramTypes
-            else lookup name (env ^. localBindings)
-
-      case mType of
-        Nothing -> throwError $ "can't resolve " <> name
-        Just typ -> return typ
-
-    else do
-      let mType = if isUpper (T.head name)
-            then listToMaybe $ do
-              _mod <- env ^. importedModules
-              guard $ _mod ^. moduleName == mname
-              typ  <- _mod ^. types
-              (constr, paramTypes) <- typ ^. constructors
-              guard $ constr == name
-              return $ constructorType mname (typ ^. typeName)
-                                       (typ ^. variables) paramTypes
-
-            else listToMaybe $ do
-              _mod <- env ^. importedModules
-              guard $ _mod ^. moduleName == mname
-              def <- _mod ^. definitions
-              guard $ def ^. defName == name
-              return $ def ^. defType
-
-      case mType of
-        Nothing ->
-          throwError $ "module " <> prettyPrint mname
-                       <> " is not imported or it doesn't export " <> name
-        Just typ -> return typ
-
-constructorType :: ModuleName -> T.Text -> [k] -> [Type] -> Type
-constructorType mname name vars paramTypes =
-    let tyConstr = TypeConstructor (FQRef mname name)
-        varCount = length vars
-        final    = addTypeVariables varCount tyConstr
-    in addUniversals varCount $ foldr FunctionType final paramTypes
-
-  where
-    addTypeVariables :: Int -> Type -> Type
-    addTypeVariables 0 ty = ty
-    addTypeVariables n ty =
-      addTypeVariables (n-1) (TypeApplication ty (TypeVariable (n - 1)))
-
-    addUniversals :: Int -> Type -> Type
-    addUniversals 0 ty = ty
-    addUniversals n ty = addUniversals (n-1) (UniversalType ty)
--}
---getRefKind :: MonadError T.Text m => ResolverEnvironment t Kind -> Ref a
---           -> m Kind
---getRefKind env (Ref mname name _) = undefined
---  | env ^. localModuleName == mname = do
---      let mTypeDef = find ((==name) . view typeName) (env ^. localTypes)
---          mKind = fmap (foldr Arrow Star . view variables) mTypeDef
---      case mKind of
---        Nothing -> throwError $ "can't resolve " <> name
---        Just kind -> return kind
---
---  | otherwise = do
---      let mKind = listToMaybe $ do
---            _mod <- env ^. importedModules
---            guard $ _mod ^. moduleName == mname
---            typ <- _mod ^. types
---            guard $ typ ^. typeName == name
---            return $ foldr Arrow Star $ typ ^. variables
---
---      case mKind of
---        Nothing ->
---          throwError $ "module " <> prettyPrint mname
---                       <> " is not imported or it doesn't export " <> name
---        Just kind -> return kind

@@ -13,6 +13,7 @@ import           Control.Monad.State
 import           Data.Char (isLower)
 import           Data.Functor.Foldable
 import           Data.List
+import           Data.Maybe
 import           Data.Monoid
 import qualified Data.Text as T
 
@@ -217,69 +218,132 @@ typeOfDefinition fqdef = traceShow (unFQDefinition fqdef ^. defName) $ case fqde
 
 typeOf :: FQTerm -> TypeChecker (Term, Type)
 typeOf fqterm = withCleanedConstraints $ do
-    (term, mty) <- go [] fqterm
+    (term, mty) <- typeCheck [] fqterm
     constraints <- use typeConstraints
     typ <- lift $ fromMetaType constraints mty
     return (term, typ)
 
+typeCheck :: [MetaType] -> FQTerm -> TypeChecker (Term, MetaType)
+typeCheck ctx fqterm = traceShow fqterm $ case fqterm of
+  Variable i -> (Variable i,) <$> getVariable ctx i
+
+  Reference (Ref mname name fqdef) -> do
+    def@(Definition d) <- typeOfDefinition fqdef
+    return (Reference (Ref mname name def), toMeta (unType (d ^. defType)))
+
+  ConstructorReference (Ref mname name fqdef) cname -> do
+    def <- kindCheckTypeDefinition mname fqdef
+    ty  <- constructorType mname def cname
+    return ( ConstructorReference (Ref mname name def) cname
+           , toMeta (unType ty) )
+
+  Abstraction (Just tyIn) te -> do
+    tyIn' <- toMeta . unType . fst <$> kindOf tyIn
+    (te', tyOut) <- typeCheck (tyIn' : ctx) te
+    return (Abstraction Nothing te', FunctionTypeM tyIn' tyOut)
+
+  Abstraction Nothing te -> do
+    (_, tyIn) <- newMetaVar
+    let ctx' = tyIn : map (bumpTypeIndexFrom 0) ctx
+    (te', tyOut) <- typeCheck ctx' te
+    return (Abstraction Nothing te', FunctionTypeM tyIn tyOut)
+
+  Application te1 te2 -> do
+    (te1', ty1) <- typeCheck ctx te1
+    (te2', ty2) <- typeCheck ctx te2
+    (i, tyU) <- newMetaVar
+    unify (FunctionTypeM ty2 tyU) ty1
+    mt <- getMetaType i
+    return (Application te1' te2', mt)
+
+  PatternMatch te pairs -> typeCheckPatternMatch ctx te pairs
+
+  IfThenElse tec te1 te2 -> do
+    (tec', tyc) <- typeCheck ctx tec
+    (te1', ty1) <- typeCheck ctx te1
+    (te2', ty2) <- typeCheck ctx te2
+    unify tyc PrimTypeBoolM
+    (i, tyU) <- newMetaVar
+    unify tyU ty1
+    unify tyU ty2
+    mt <- getMetaType i
+    return (IfThenElse tec' te1' te2', mt)
+
+  PrimBool b -> return (PrimBool b, PrimTypeBoolM)
+  PrimInt i -> return (PrimInt i, PrimTypeIntM)
+
+  FixTerm -> do
+    -- fix : forall a. (a -> a) -> a
+    let mt = UniversalTypeM (FunctionTypeM
+                            (FunctionTypeM (TypeVariableM 0)
+                                           (TypeVariableM 0))
+                            (TypeVariableM 0))
+    return (FixTerm, mt)
+
+  Constructor _ _ _ -> error "typeCheck: the impossible happened"
+
+typeCheckPatternMatch :: [MetaType] -> FQTerm -> [(FQPattern, FQTerm)]
+                      -> TypeChecker (Term, MetaType)
+typeCheckPatternMatch ctx te pairs = do
+    (te', ty) <- typeCheck ctx te
+    (i, tyU)  <- newMetaVar
+
+    (missing, mkPairs) <- foldM (go ty tyU) (MissingAll, id) pairs
+    case missing of
+      MissingNone -> return ()
+      _ -> throwError "non-exhaustive pattern matching"
+
+    mt <- getMetaType i
+    return (PatternMatch te' (mkPairs []), mt)
+
   where
-    go :: [MetaType] -> FQTerm -> TypeChecker (Term, MetaType)
-    go ctx fqterm = traceShow fqterm $ case fqterm of
-      Variable i -> (Variable i,) <$> getVariable ctx i
+    go :: MetaType -> MetaType
+       -> (MissingPatterns, [(Pattern, Term)] -> [(Pattern, Term)])
+       -> (FQPattern, FQTerm)
+       -> TypeChecker (MissingPatterns, [(Pattern, Term)] -> [(Pattern, Term)])
+    go headmty branchmty (missing, f) (pat, te) = do
+      (pat', patmty, extraCtx) <- typeCheckPattern pat
+      unify headmty patmty
 
-      Reference (Ref mname name fqdef) -> do
-        def@(Definition d) <- typeOfDefinition fqdef
-        return (Reference (Ref mname name def), toMeta (unType (d ^. defType)))
+      (te', temty) <- typeCheck (extraCtx ++ ctx) te
+      unify temty branchmty
 
-      ConstructorReference (Ref mname name fqdef) cname -> do
-        def <- kindCheckTypeDefinition mname fqdef
-        ty  <- constructorType mname def cname
-        traceShow ("constructor:", cname, ty) $ do
-         return ( ConstructorReference (Ref mname name def) cname
-               , toMeta (unType ty) )
+      missing' <- case removeMissingPattern missing pat' of
+        Nothing -> throwError "redundant pattern"
+        Just m  -> return m
 
-      Abstraction (Just tyIn) te -> do
-        tyIn' <- toMeta . unType . fst <$> kindOf tyIn
-        (te', tyOut) <- go (tyIn' : ctx) te
-        return (Abstraction Nothing te', FunctionTypeM tyIn' tyOut)
+      return (missing', f . ((pat', te') :))
 
-      Abstraction Nothing te -> do
-        (_, tyIn) <- newMetaVar
-        let ctx' = tyIn : map (bumpTypeIndexFrom 0) ctx
-        (te', tyOut) <- go ctx' te
-        return (Abstraction Nothing te', FunctionTypeM tyIn tyOut)
+typeCheckPattern :: FQPattern -> TypeChecker (Pattern, MetaType, [MetaType])
+typeCheckPattern = \case
+  WildcardPattern ->  (\(_,mt) -> (WildcardPattern, mt, [])) <$> newMetaVar
+  VariablePattern name ->
+    (\(_,mt) -> (VariablePattern name, mt, [mt])) <$> newMetaVar
+  ConstructorPattern (Ref mname name def) cname patterns -> do
+    def' <- kindCheckTypeDefinition mname def
 
-      Application te1 te2 -> do
-        (te1', ty1) <- go ctx te1
-        (te2', ty2) <- go ctx te2
-        (i, tyU) <- newMetaVar
-        unify (FunctionTypeM ty2 tyU) ty1
-        mt <- getMetaType i
-        return (Application te1' te2', mt)
+    argTypes <- case lookup cname (def' ^. constructors) of
+      Nothing -> throwError $ "unknown constructor " <> cname <> " for type "
+                              <> prettyPrint mname <> "." <> name
+      Just ts -> return ts
+    unless (length patterns == length argTypes) $
+      throwError "invalid number of arguments to constructor in pattern"
 
-      IfThenElse tec te1 te2 -> do
-        (tec', tyc) <- go ctx tec
-        (te1', ty1) <- go ctx te1
-        (te2', ty2) <- go ctx te2
-        unify tyc PrimTypeBoolM
-        (i, tyU) <- newMetaVar
-        unify tyU ty1
-        unify tyU ty2
-        mt <- getMetaType i
-        return (IfThenElse tec' te1' te2', mt)
+    varMetaTypes <- map snd <$> mapM (\_ -> newMetaVar) (def' ^. variables)
 
-      PrimBool b -> return (PrimBool b, PrimTypeBoolM)
-      PrimInt i -> return (PrimInt i, PrimTypeIntM)
+    subs <- forM (zip argTypes patterns) $ \(argType, pat) -> do
+      let argMetaType = substDeBruijnIndex 0 (zip [1..] varMetaTypes)
+                                           (toMeta (unType argType))
+      sub@(_, patternMetaType, _) <- typeCheckPattern pat
+      unify argMetaType patternMetaType
+      return sub
 
-      FixTerm -> do
-        -- fix : forall a. (a -> a) -> a
-        let mt = UniversalTypeM (FunctionTypeM
-                                (FunctionTypeM (TypeVariableM 0)
-                                               (TypeVariableM 0))
-                                (TypeVariableM 0))
-        return (FixTerm, mt)
+    let patterns' = map (\(p,_,_) -> p) subs
+        extraCtx  = concatMap (\(_,_,c) -> c) subs
+        ref'       = Ref mname name def'
+        mt = foldr FunctionTypeM (TypeConstructorM ref') varMetaTypes
 
-      Constructor _ _ _ -> error "typeOf: the impossible happened"
+    return (ConstructorPattern ref' cname patterns', mt, extraCtx)
 
 -- | Unify the two given types and adapt the constraints in the state.
 -- The first given type is a subtype of the second.
@@ -331,8 +395,6 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
                         substDeBruijnIndex 0 repl tyOut'
         unify (FunctionTypeM tyIn tyOut) (FunctionTypeM tyInMono tyOut'')
       mt -> do
-        constraints <- use typeConstraints
-        t <- lift $ fromMetaType constraints mt
         throwError $ "can't unify universal type with " <> prettyPrint mt
 
     -- It takes a type without the leading UniversalType constructors,
@@ -370,23 +432,84 @@ unify l r = traceShow (prettyPrint l, prettyPrint r) $ case (l, r) of
     addUniversals 0 = id
     addUniversals i = UniversalTypeM . addUniversals (i-1)
 
-    substDeBruijnIndex :: Int -> [(Int, MetaType)] -> MetaType -> MetaType
-    substDeBruijnIndex base repl = cata $ \case
-      MetaBase (TypeVariableF i) ->
-        case lookup (i - base) repl of
-          Just mt -> mt
-          Nothing ->
-            let count = foldl (\c (i',_) -> if i' + base < i then c + 1 else 0)
-                              0 repl
-            in TypeVariableM (i - count)
-      mt -> Fix mt
-
     unifyMetaIndex :: Int -> MetaType -> TypeChecker ()
     unifyMetaIndex i t = do
       mMT <- findMetaType i
       case mMT of
         Nothing -> addMetaType i t
         Just mt -> unify mt t
+
+-- FIXME: what about nested forall's?
+substDeBruijnIndex :: Int -> [(Int, MetaType)] -> MetaType -> MetaType
+substDeBruijnIndex base repl = cata $ \case
+  MetaBase (TypeVariableF i) ->
+    case lookup (i - base) repl of
+      Just mt -> mt
+      Nothing ->
+        let count = foldl (\c (i',_) -> if i' + base < i then c + 1 else 0)
+                          0 repl
+        in TypeVariableM (i - count)
+  mt -> Fix mt
+
+{-
+monomorphiseType :: MetaType -> TypeChecker (MetaType, [(Int, MetaType)])
+monomorphiseType threshold acc = \case
+  t@(MetaIndex _) -> return (t, acc)
+  t@(TypeVariableM i)
+    | i >= threshold ->
+        case lookup i acc of
+          Nothing -> do
+            (_, mvar) <- newMetaVar
+            return (mvar, (i, mvar) : acc)
+          Just mt -> return (mt, acc)
+    | otherwise -> return (t, acc)
+  FunctionTypeM t1 t2 -> do
+    (t1', acc')  <- monomorphiseType threshold acc  t1
+    (t2', acc'') <- monomorphiseType threshold acc' t2
+    return (FunctionTypeM t1' t2', acc'')
+  UniversalTypeM t -> do
+    (t', acc') <- monomorphiseType (threshold + 1) acc t
+    return (UniversalTypeM t', acc')
+  PrimTypeBoolM -> return (PrimTypeBoolM, acc)
+  PrimTypeIntM -> return (PrimTypeIntM, acc)
+  TypeConstructorM ref -> return (TypeConstructorM ref, acc)
+  TypeApplicationM t1 t2 -> do
+    (t1', acc')  <- monomorphiseType threshold acc  t1
+    (t2', acc'') <- monomorphiseType threshold acc' t2
+    return (TypeApplicationM t1' t2', acc'')
+-}
+
+data MissingPatterns
+  = MissingAll
+  | MissingConstructors [(T.Text, [MissingPatterns])]
+  | MissingNone
+  deriving (Eq, Show)
+
+removeMissingPattern :: MissingPatterns -> Pattern -> Maybe MissingPatterns
+removeMissingPattern missing pat = case (missing, pat) of
+  (MissingNone, _) -> Nothing
+  (_, WildcardPattern) -> Just MissingNone
+  (_, VariablePattern _) -> Just MissingNone
+
+  (MissingAll, ConstructorPattern (Ref _ _ def) _ _) ->
+    let missing' = MissingConstructors $
+          map (fmap (map (const MissingAll))) (def ^. constructors)
+    in removeMissingPattern missing' pat
+
+  (MissingConstructors constrs, ConstructorPattern _ cname patterns) -> do
+    let (res, others) = partition ((==cname) . fst) constrs
+    missings <- snd <$> listToMaybe res
+    guard $ length missings == length patterns
+
+    let step (missing', pat') (acc, changed) =
+          case removeMissingPattern missing' pat' of
+            Nothing -> (missing' : acc, changed)
+            Just missing'' -> (missing'' : acc, True)
+        (missings', changed) = foldr step ([], False) (zip missings patterns)
+
+    if changed
+      then Just $ MissingConstructors $ (cname, missings') : others
+      else Nothing
 
 -- | Increase the De Bruijn indices by 1 if they are above a threshold.
 bumpTypeIndexFrom :: Int -> MetaType -> MetaType

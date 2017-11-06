@@ -15,6 +15,7 @@ ghc-options:          -Wall
 
 dependencies:
   - base >= 4.7 && < 5
+  - attoparsec
   - text
 
 default-extensions:
@@ -43,8 +44,7 @@ tests:
     main:             Main.hs
     dependencies:
       - epic
-      - QuickCheck
+      - hedgehog
       - tasty
-      - tasty-discover
-      - tasty-hspec
-      - tasty-quickcheck
+      - tasty-hedgehog
+      - tasty-hunit
