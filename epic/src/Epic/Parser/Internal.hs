@@ -261,15 +261,15 @@ abstraction indent vars = do
 ifthenelse :: T.Text -> [T.Text] -> Parser LocalTerm
 ifthenelse indent vars = do
   _ <- string "if"
-  indentc <- sep indent
+  indentc <- sep1 indent
   tc <- termParser indentc operators True True True True vars
-  _ <- sep indent
+  _ <- sep1 indent
   _ <- string "then"
-  indent1 <- sep indent
+  indent1 <- sep1 indent
   t1 <- termParser indent1 operators True True True True vars
-  _ <- sep indent
+  _ <- sep1 indent
   _ <- string "else"
-  indent2 <- sep indent
+  indent2 <- sep1 indent
   t2 <- termParser indent2 operators True True True True vars
   return $ IfThenElse tc t1 t2
 

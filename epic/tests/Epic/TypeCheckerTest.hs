@@ -1,15 +1,25 @@
 module Epic.TypeCheckerTest where
 
 import Epic.Language
-import Epic.TypeChecker
+import Epic.TypeChecker.Internal
 
 import TestHelpers
 
---prop_typeShiftXY :: Int -> Int -> Type -> Bool
---prop_typeShiftXY x y typ =
---  typeShift x (typeShift y typ) == typeShift (x + y) typ
+typeCheckerTests :: TestTree
+typeCheckerTests = testGroup "Epic.TypeChecker"
+  [ toMetaTests, substMetaTests ]
 
---spec_typeOf :: Spec
---spec_typeOf = do
---  it "returns the type of a variable" $ do
---    1 + 1 `shouldBe` 2
+toMetaTests :: TestTree
+toMetaTests = testGroup "toMeta"
+  [ testCase "transforms a Type into a MetaType" $ do
+      toMeta (FunctionType PrimTypeInt PrimTypeBool)
+        @?= (FunctionTypeM PrimTypeIntM PrimTypeBoolM :: MetaType)
+
+  , testCase "transforms a Kind into a MetaKind" $ do
+      toMeta (Arrow Star Star) @?= (ArrowM StarM StarM :: MetaKind)
+  ]
+
+substMetaTests :: TestTree
+substMetaTests = testGroup "substMeta"
+  [
+  ]

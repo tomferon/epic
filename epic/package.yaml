@@ -16,6 +16,8 @@ ghc-options:          -Wall
 dependencies:
   - base >= 4.7 && < 5
   - attoparsec
+  - lens
+  - mtl
   - text
 
 default-extensions:
@@ -30,12 +32,9 @@ default-extensions:
 library:
   source-dirs:        src
   dependencies:
-    - attoparsec
     - deriving-compat
     - directory
     - filepath
-    - lens
-    - mtl
     - recursion-schemes
 
 tests:

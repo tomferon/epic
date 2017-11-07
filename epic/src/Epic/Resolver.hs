@@ -1,4 +1,21 @@
-module Epic.Resolver where
+module Epic.Resolver
+  ( ResolverEnvironment(..)
+  , importedModules, localModuleName, localBindings, localTypes
+  , buildEnvironment
+  , resolveModules
+  , resolveModule
+  , resolveTypeDefinitions
+  , resolveTypeDefinition
+  , resolveType
+  , resolveLocalType
+  , resolveDefinitions
+  , resolveDefinition
+  , resolveTerm
+  , resolvePattern
+  , resolveReference
+  , resolveConstructorReference
+  , reorderModules
+  ) where
 
 import           Control.Applicative
 import           Control.Lens
@@ -17,9 +34,9 @@ import           Epic.PrettyPrinter
 data ResolverEnvironment = ResolverEnvironment
   { _importedModules :: [FQModule]
   , _localModuleName :: ModuleName
-  , _localBindings   :: [(T.Text, FQDefinition)]
+  , _localBindings   :: [FQDefinition]
   , _localTypes      :: [TypeDefinition FQType ()]
-  }
+  } deriving (Eq, Show)
 
 makeLenses ''ResolverEnvironment
 
@@ -165,7 +182,7 @@ resolveDefinition env ldef = do
       ForeignDefinition name <$> resolveType env localType
 
   let fqdef = FQDefinition def
-      env' = env & localBindings %~ ((def ^. defName, fqdef) :)
+      env' = env & localBindings %~ (fqdef :)
   return (env', fqdef)
 
 resolveTerm :: MonadError T.Text m => ResolverEnvironment -> LocalTerm
@@ -211,7 +228,8 @@ resolveReference env lref = do
   let mRef = case lref of
         NameReference name ->
           let mLocal = do
-                def <- lookup name (env ^. localBindings)
+                def <- find ((==name) . view defName . unFQDefinition)
+                            (env ^. localBindings)
                 return $ Ref (env ^. localModuleName) name def
 
               mImported = listToMaybe $ do
@@ -266,7 +284,7 @@ resolveConstructorReference env lref = do
     Nothing  -> throwError $ "can't find reference " <> prettyPrint lref
     Just ref -> return ref
 
--- | Reorder modules so that modules only depend on modules to the left.
+-- | Reorder modules so that modules only depend on modules on the left.
 reorderModules :: MonadError T.Text m => [ModuleP tedef tydef]
                -> m [ModuleP tedef tydef]
 reorderModules = go id []

@@ -18,16 +18,17 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 
 import           Epic.Language
+import           Epic.Parser.Internal
 
 identifierGen :: Gen T.Text
-identifierGen = do
+identifierGen = Gen.filter (`notElem` reservedKeywords) $ do
   fc   <- Gen.lower
   rest <- Gen.text (Range.linear 0 10) $
     Gen.frequency [(9, Gen.alphaNum), (1, return '_')]
   return $ T.cons fc rest
 
 constructorGen :: Gen T.Text
-constructorGen = do
+constructorGen = Gen.filter (`notElem` ["Bool", "Int"]) $ do
   fc   <- Gen.upper
   rest <- Gen.text (Range.linear 0 10) $
     Gen.frequency [(9, Gen.alphaNum), (1, return '_')]

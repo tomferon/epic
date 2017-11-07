@@ -259,7 +259,7 @@ operatorTests = testGroup "operator"
 
 commentTests :: TestTree
 commentTests = testGroup "comment"
-  [testProperty "comment consumes comments until newline" commentConsume]
+  [testProperty "consumes comments until newline" commentConsume]
 
 commentConsume :: Property
 commentConsume = property $ do
@@ -340,8 +340,8 @@ moduleGen = do
     iname <- moduleNameGen
     return ("import " <> T.intercalate "." (unModuleName iname), iname)
 
-  typeNames <- Gen.list (Range.linear 0 5) constructorGen
-  termNames <- Gen.list (Range.linear 0 5) identifierGen
+  typeNames <- fmap nub $ Gen.list (Range.linear 0 5) constructorGen
+  termNames <- fmap nub $ Gen.list (Range.linear 0 5) identifierGen
 
   (typeTxts, typeDecls) <- fmap unzip $ mapM typeDeclarationGen typeNames
   let typeDefs = map (\(TypeDeclaration def) -> def) typeDecls
@@ -465,7 +465,7 @@ abstractionGen vars = do
 
 ifthenelseGen :: [T.Text] -> Gen (T.Text, LocalTerm)
 ifthenelseGen vars = do
-  (condTxt,  condTerm)  <- termGen True True True True vars
+  (condTxt,  condTerm)  <- termGen False False False True vars
   (trueTxt,  trueTerm)  <- termGen True True True True vars
   (falseTxt, falseTerm) <- termGen True True True True vars
   let expr = "if " <> condTxt <> " then " <> trueTxt <> " else " <> falseTxt
