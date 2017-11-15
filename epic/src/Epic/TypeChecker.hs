@@ -1,6 +1,6 @@
 module Epic.TypeChecker
-  ( typeOfModule
-  , typeOfModules
+  ( typeCheckModule
+  , typeCheckModules
   ) where
 
 import Debug.Trace
@@ -23,14 +23,14 @@ import           Epic.PrettyPrinter
 import           Epic.Resolver
 import           Epic.TypeChecker.Internal
 
-typeOfModule :: Maybe [T.Text] -> FQModule -> TypeChecker TypedModule
-typeOfModule mForeignNames _mod = do
+typeCheckModule :: Maybe [T.Text] -> FQModule -> TypeChecker TypedModule
+typeCheckModule mForeignNames _mod = do
     _mod' <- forOf (types . each) _mod
                    (kindCheckTypeDefinition (_mod ^. moduleName))
     forOf (definitions . each) _mod' (typeCheckDefinition (_mod ^. moduleName))
 
-typeOfModules :: MonadError T.Text m => Maybe [T.Text] -> [FQModule]
+typeCheckModules :: MonadError T.Text m => Maybe [T.Text] -> [FQModule]
               -> m [TypedModule]
-typeOfModules mForeignNames mods = either throwError return $
-  evalStateT (reorderModules mods >>= mapM (typeOfModule mForeignNames))
+typeCheckModules mForeignNames mods = either throwError return $
+  evalStateT (reorderModules mods >>= mapM (typeCheckModule mForeignNames))
              emptyTypeCheckerState

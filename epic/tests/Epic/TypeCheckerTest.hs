@@ -380,7 +380,7 @@ applicationGen resultGen = do
                  , (Application absTerm   paramTerm, typ) )
      ]
 
--- No universal types as it does play well with recursion.
+-- No universal types as it doesn't play well with recursion.
 abstractionGen :: (FQType, Type) -> (FQTerm, (Term, Type))
                -> Gen (FQTerm, (Term, Type))
 abstractionGen (fqtyp, Type typ) (bodyFQTerm, (bodyTerm, Type bodyType)) = do
