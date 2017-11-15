@@ -1,11 +1,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 
-module Epic.PrettyPrinter where
---  ( ppType
---  , ppReference
---  ) where
-
-import Debug.Trace
+module Epic.PrettyPrinter
+  ( Pretty(..)
+  ) where
 
 import           Control.Lens
 
@@ -34,10 +31,6 @@ nameStream _ = go (map T.singleton alphabet)
 
     alphabet :: [Char]
     alphabet = "abcdefghijklmnopqrstuvwxyz"
-
-streamElem :: Int -> Stream a -> a
-streamElem 0 (Cons x _) = x
-streamElem n (Cons _ xs) = streamElem (n-1) xs
 
 -- FIXME: Remove duplication in ppType and ppMetaType
 -- FIXME: Use Data.Text.Lazy.Builder?
@@ -75,7 +68,7 @@ instance Pretty r => Pretty (Fix (TypePF r)) where
           in "forall" <> forallNames <> ". " <> go False ns names t
 
 instance Pretty MetaType where
-  prettyPrint = go False (nameStream ()) [] . traceShowId
+  prettyPrint = go False (nameStream ()) []
     where
       go :: Bool -> Stream T.Text -> [T.Text] -> Fix (MetaF (TypePF (Ref a)))
          -> T.Text
@@ -141,7 +134,7 @@ instance Pretty ModuleName where
   prettyPrint = T.intercalate "." . unModuleName
 
 instance Pretty TypedModule where
-  prettyPrint tmod = traceShow tmod $
+  prettyPrint tmod =
       "module " <> prettyPrint (tmod ^. moduleName)
       <> (if null (tmod ^. types)
             then ""

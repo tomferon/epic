@@ -14,20 +14,21 @@ extra-source-files:
 ghc-options:          -Wall
 
 dependencies:
-  - base >= 4.7 && < 5
   - attoparsec
+  - base >= 4.7 && < 5
   - lens
   - mtl
+  - recursion-schemes
   - text
 
 default-extensions:
+  - DeriveFunctor
+  - FlexibleContexts
   - LambdaCase
   - OverloadedStrings
-  - TupleSections
-  - FlexibleContexts
-  - TemplateHaskell
-  - DeriveFunctor
   - PatternSynonyms
+  - TemplateHaskell
+  - TupleSections
 
 library:
   source-dirs:        src
@@ -35,7 +36,6 @@ library:
     - deriving-compat
     - directory
     - filepath
-    - recursion-schemes
 
 tests:
   unit-tests:
