@@ -35,7 +35,7 @@ type Option a
   = Some a
   | None
 
-head : forall a. List Int -> Option a
+head : forall a. List a -> Option a
 head = \l -> match l with
-  Cons _ _ -> None
+  Cons x _ -> Some x
   Nil -> None

@@ -5,6 +5,7 @@ module Epic.TypeCheckerTest where
 import           Control.Lens
 import           Control.Monad.State
 
+import           Data.Either
 import           Data.Functor.Foldable
 import qualified Data.Text as T
 
@@ -20,7 +21,7 @@ import           TestHelpers
 typeCheckerTests :: TestTree
 typeCheckerTests = testGroup "Epic.TypeChecker"
   [ toMetaTests, substMetaTests, fromMetaTypeTests, fromMetaKindTests
-  , typeCheckDefinitionTests, typeOfTests, removeMissingPatternTests
+  , typeCheckDefinitionTests, typeOfTests, unifyTests, removeMissingPatternTests
   , substDeBruijnIndexTests, bumpTypeIndexFromTests, constructorTypeTests
   , kindCheckTypeDefinitionTests
   ]
@@ -210,6 +211,45 @@ typeOfTests = testGroup "typeOf"
                       PrimTypeInt)
 
       evalStateT (typeOf fqterm) emptyTypeCheckerState @?= Right (term, typ)
+
+  , testCase "accepts a generic function where a more specific one was\
+             \ expected" $ do
+      let idTerm = Abstraction Nothing (Variable 0)
+          idTyp  = Type (UniversalType
+                         (FunctionType (TypeVariable 0) (TypeVariable 0)))
+          idFQDef = FQDefinition (TermDefinition "id"
+                                  (error "should not use this value") Nothing)
+          idDef  = Definition (TermDefinition "id" idTerm idTyp)
+
+          fTerm = Abstraction Nothing (Application (Variable 0) (PrimInt 42))
+          fTyp  = Type (FunctionType (FunctionType PrimTypeInt PrimTypeInt)
+                                     PrimTypeInt)
+          fFQDef = FQDefinition (TermDefinition "f"
+                                  (error "should not use this value") Nothing)
+          fDef  = Definition (TermDefinition "f" fTerm fTyp)
+
+          fqterm = Application (Reference (Ref (ModuleName ["A"]) "f"  fFQDef))
+                               (Reference (Ref (ModuleName ["A"]) "id" idFQDef))
+          term   = Application (Reference (Ref (ModuleName ["A"]) "f"  fDef))
+                               (Reference (Ref (ModuleName ["A"]) "id" idDef))
+
+          st = emptyTypeCheckerState & typedDefinitions .~
+                 [ ((ModuleName ["A"], "id"), idDef)
+                 , ((ModuleName ["A"], "f"),  fDef) ]
+
+      evalStateT (typeOf fqterm) st @?= Right (term, Type PrimTypeInt)
+  ]
+
+unifyTests :: TestTree
+unifyTests = testGroup "unify"
+  [ testCase "rejects forall a. Int -> a as a subtype of forall a. a -> a" $ do
+      let typeA = UniversalTypeM (FunctionTypeM PrimTypeIntM (TypeVariableM 0))
+          typeB = UniversalTypeM (FunctionTypeM (TypeVariableM 0)
+                                                (TypeVariableM 0))
+      assertBool "should fail"
+                 (isLeft (evalStateT (unify typeA typeB)
+                                     emptyTypeCheckerState))
+
   ]
 
 removeMissingPatternTests :: TestTree

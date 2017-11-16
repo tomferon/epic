@@ -360,11 +360,10 @@ unify l r = case (l, r) of
       unify tyOut tyOut'
 
     (UniversalTypeM ty1, UniversalTypeM ty2) -> do
-      (_, mt1) <- newMetaVar
+      -- Every type variable on the lhs needs to stay universal on the rhs.
       (_, mt2) <- newMetaVar
-      let ty1' = substDeBruijnIndex 0 [(0, mt1)] ty1
-          ty2' = substDeBruijnIndex 0 [(0, mt2)] ty2
-      unify ty1' ty2'
+      let ty2' = substDeBruijnIndex 0 [(0, mt2)] ty2
+      unify ty1 ty2'
 
     (FunctionTypeM tyIn tyOut, UniversalTypeM ty) ->
       universalHelper 1 tyIn tyOut ty
@@ -395,8 +394,7 @@ unify l r = case (l, r) of
         let tyOut'' = addUniversals (count - length repl) $
                         substDeBruijnIndex 0 repl tyOut'
         unify (FunctionTypeM tyIn tyOut) (FunctionTypeM tyInMono tyOut'')
-      mt -> do
-        throwError $ "can't unify universal type with " <> prettyPrint mt
+      mt -> throwError $ "can't unify universal type with " <> prettyPrint mt
 
     -- It takes a type without the leading UniversalType constructors,
     -- replaces the type variables by meta variables and returns the newly
@@ -443,6 +441,7 @@ unify l r = case (l, r) of
 -- FIXME: what about nested forall's?
 substDeBruijnIndex :: Int -> [(Int, MetaType)] -> MetaType -> MetaType
 substDeBruijnIndex base repl = \case
+  MetaIndex i -> MetaIndex i
   TypeVariableM i ->
     case lookup (i - base) repl of
       Just mt -> mt
