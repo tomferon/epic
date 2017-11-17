@@ -99,6 +99,7 @@ data TypeDefinition t k = TypeDefinition
 
 makeLenses ''TypeDefinition
 
+-- FIXME: Shouldn't it contain the index of the constructor after the resolver?
 data PatternP tyref
   = ConstructorPattern tyref T.Text [PatternP tyref]
   | VariablePattern T.Text
@@ -122,8 +123,6 @@ data TermP teref tyref ty
   | PrimInt Int
   | FixTerm
   -- FIXME: | TypeAnnotation (TermP teref ty) ty
-  -- The following is impossible to construct through parsing.
-  | Constructor Int [TermP teref tyref ty] ty
   deriving (Eq, Show)
 
 type LocalTerm = TermP LocalReference LocalReference LocalType

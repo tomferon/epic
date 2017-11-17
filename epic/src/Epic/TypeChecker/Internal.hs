@@ -282,8 +282,6 @@ typeCheck ctx fqterm = case fqterm of
                             (TypeVariableM 0))
     return (FixTerm, mt)
 
-  Constructor _ _ _ -> error "typeCheck: the impossible happened"
-
 typeCheckPatternMatch :: [MetaType] -> FQTerm -> [(FQPattern, FQTerm)]
                       -> TypeChecker (Term, MetaType)
 typeCheckPatternMatch ctx te pairs = do

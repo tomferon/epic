@@ -210,7 +210,6 @@ resolveTerm env = go
       PrimBool b -> return $ PrimBool b
       PrimInt i -> return $ PrimInt i
       FixTerm -> return FixTerm
-      Constructor i _ ty -> Constructor i [] <$> resolveType env ty
 
 resolvePattern :: MonadError T.Text m => ResolverEnvironment -> LocalPattern
                -> m FQPattern
