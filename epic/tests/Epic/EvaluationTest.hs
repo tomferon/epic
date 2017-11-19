@@ -2,6 +2,11 @@ module Epic.EvaluationTest
   ( evaluationTests
   ) where
 
+import Control.Monad
+import Control.Monad.ST
+
+import Data.STRef
+
 import Epic.Evaluation
 import Epic.Evaluation.Internal
 import Epic.Language
@@ -16,7 +21,11 @@ evalWHNFTests :: TestTree
 evalWHNFTests = testGroup "evalWHNF"
   [ testCase "evaluates an application on an abstraction" $ do
       let term = Application (Abstraction Nothing (Variable 0)) (PrimInt 42)
-      evalWHNF [] (BaseTerm term) @?= BaseTerm (PrimInt 42)
+      join $ stToIO $ do
+        res <- evalWHNF [] term
+        return $ case res of
+          BaseTerm t -> t @?= PrimInt 42
+          _ -> assertFailure "should be BaseTerm"
 
   , testCase "evaluates a reference to the value it's pointing to" $ do
       let idTerm = Abstraction Nothing (Variable 0)
@@ -27,20 +36,28 @@ evalWHNFTests = testGroup "evalWHNF"
 
           term = Application (Reference idRef) (PrimInt 42)
 
-      evalWHNF [] (BaseTerm term) @?= BaseTerm (PrimInt 42)
+      join $ stToIO $ do
+        res <- evalWHNF [] term
+        return $ case res of
+          BaseTerm t -> t @?= PrimInt 42
+          _ -> assertFailure "should be BaseTerm"
 
   , testCase "evaluates a foreign reference to the corresponding Haskell\
               \ function" $ do
-      let inc (BaseTerm (PrimInt x)) = BaseTerm (PrimInt (x+1))
+      let inc (BaseTerm (PrimInt x)) = return $ BaseTerm (PrimInt (x+1))
           inc _ = undefined
 
           incType = Type (FunctionType PrimTypeInt PrimTypeInt)
           incDef  = Definition (ForeignDefinition "inc" incType)
-          idRef   = Ref (ModuleName ["A"]) "inc" incDef
+          incRef  = Ref (ModuleName ["A"]) "inc" incDef
 
-          term = Application (Reference idRef) (PrimInt 42)
+          term = Application (Reference incRef) (PrimInt 42)
 
-      evalWHNF [("inc", inc)] (BaseTerm term) @?= BaseTerm (PrimInt 43)
+      join $ stToIO $ do
+        res <- evalWHNF [("inc", inc)] term
+        return $ case res of
+          BaseTerm t -> t @?= PrimInt 43
+          _ -> assertFailure "should be BaseTerm"
 
   , testCase "evaluates an application to a constructor" $ do
       let typeDef = TypeDefinition "SomeType" []
@@ -50,12 +67,30 @@ evalWHNFTests = testGroup "evalWHNF"
           term = Application (ConstructorReference typeRef "SomeConstructor")
                              (PrimInt 100)
 
-      evalWHNF [] (BaseTerm term) @?= Constructor 0 [BaseTerm (PrimInt 100)]
+      join $ stToIO $ do
+        res <- evalWHNF [] term
+        case res of
+          Constructor 0 [thunk] -> do
+            et <- evalThunk thunk
+            case et of
+              BaseTerm t -> return $ t @?= PrimInt 100
+              _ -> return $ assertFailure "should be BaseTerm"
+          _ -> return $ assertFailure "should be Constructor 0 [_]"
 
   , testCase "evaluates the correct branch of an if-then-else" $ do
       let term b = IfThenElse (PrimBool b) (PrimInt 1) (PrimInt 2)
-      evalWHNF [] (BaseTerm (term True))  @?= BaseTerm (PrimInt 1)
-      evalWHNF [] (BaseTerm (term False)) @?= BaseTerm (PrimInt 2)
+
+      join $ stToIO $ do
+        res <- evalWHNF [] (term True)
+        return $ case res of
+          BaseTerm t -> t @?= PrimInt 1
+          _ -> assertFailure "should be BaseTerm"
+
+      join $ stToIO $ do
+        res <- evalWHNF [] (term False)
+        return $ case res of
+          BaseTerm t -> t @?= PrimInt 2
+          _ -> assertFailure "should be BaseTerm"
 
   , testCase "evaluates an application to fix recursively" $ do
       -- fix (\f -> \b -> if b then 0 else f true)
@@ -67,7 +102,11 @@ evalWHNFTests = testGroup "evalWHNF"
                     (Application (Variable 1) (PrimBool True)))))
           term = Application func (PrimBool False)
 
-      evalWHNF [] (BaseTerm term) @?= BaseTerm (PrimInt 0)
+      join $ stToIO $ do
+        res <- evalWHNF [] term
+        return $ case res of
+          BaseTerm t -> t @?= PrimInt 0
+          _ -> assertFailure "should be BaseTerm"
 
   , testCase "matches patterns" $ do
       let list = Application
@@ -81,33 +120,90 @@ evalWHNFTests = testGroup "evalWHNF"
                , ConstructorPattern listTypeRef "Nil" [] ], Variable 0)
             , (VariablePattern "x", Variable 0) ]
 
-      evalWHNF [] (BaseTerm term) @?= BaseTerm (PrimInt 1337)
+      join $ stToIO $ do
+        res <- evalWHNF [] term
+        return $ case res of
+          BaseTerm t -> t @?= PrimInt 1337
+          _ -> assertFailure "should be BaseTerm"
+
+  , testCase "has a non-strict evaluation" $ do
+      join $ stToIO $ do
+        calledRef <- newSTRef False
+
+        let inc (BaseTerm (PrimInt x)) = do
+              writeSTRef calledRef True
+              return $ BaseTerm (PrimInt (x+1))
+            inc _ = undefined
+
+            incType = Type (FunctionType PrimTypeInt PrimTypeInt)
+            incDef  = Definition (ForeignDefinition "inc" incType)
+            incRef  = Ref (ModuleName ["A"]) "inc" incDef
+
+            term = Application
+                   (Application
+                    (ConstructorReference listTypeRef "Cons")
+                    (Application (Reference incRef) (PrimInt 42)))
+                   (ConstructorReference listTypeRef "Nil")
+
+        res <- evalWHNF [("inc", inc)] term
+        case res of
+          Constructor 0 [_, thunk] -> do
+            called  <- readSTRef calledRef
+            et      <- evalThunk thunk
+            called' <- readSTRef calledRef
+
+            return $ case et of
+              BaseTerm t -> do
+                called  @?= False
+                t       @?= PrimInt 43
+                called' @?= True
+              _ -> assertFailure "should be BaseTerm"
+          _ -> return $ assertFailure "should be Constructor 0 [_, _]"
   ]
 
 matchPatternsTests :: TestTree
 matchPatternsTests = testGroup "matchPatterns"
   [ testCase "returns the first branch that the term matches" $ do
-      matchPatterns [] []
-                    (Constructor 0 [ BaseTerm (PrimBool True)
-                                   , Constructor 1 [] ])
-                    [ (ConstructorPattern listTypeRef "Nil" [], PrimInt 1)
-                    , (WildcardPattern, PrimInt 2) ]
-        @?= (PrimInt 2, [])
+      join $ stToIO $ do
+        thunk <- makeThunk $ do
+          thunk0 <- makeThunk $ return $ BaseTerm $ PrimBool True
+          thunk1 <- makeThunk $ return $ Constructor 1 []
+          return $ Constructor 0 [thunk1, thunk0]
+
+        (t, thunks) <- matchPatterns thunk
+          [ (ConstructorPattern listTypeRef "Nil" [], PrimInt 1)
+          , (WildcardPattern, PrimInt 2) ]
+
+        return $ case thunks of
+          [] -> t @?= PrimInt 2
+          _ -> assertFailure "extra context should be empty"
 
   , testCase "returns the values to assign to the variables" $ do
-      matchPatterns [] []
-                    (Constructor 0 [ Constructor 0 [ Constructor 1 []
-                                                   , BaseTerm (PrimInt 2) ]
-                                   , BaseTerm (PrimInt 1) ])
-                    [ (ConstructorPattern listTypeRef "Nil" [], PrimBool False)
-                    , (ConstructorPattern listTypeRef "Cons"
-                       [ VariablePattern "x"
-                       , ConstructorPattern listTypeRef "Cons"
-                           [ VariablePattern "y"
-                           , VariablePattern "z" ]], PrimBool True) ]
-        @?= (PrimBool True, [ Constructor 1 []
-                            , BaseTerm (PrimInt 2)
-                            , BaseTerm (PrimInt 1) ])
+      join $ stToIO $ do
+        thunk <- makeThunk $ do
+          thunk0 <- makeThunk $ return $ BaseTerm $ PrimInt 1
+          thunk1 <- makeThunk $ do
+            thunk2 <- makeThunk $ return $ BaseTerm $ PrimInt 2
+            thunk3 <- makeThunk $ return $ Constructor 1 []
+            return $ Constructor 0 [thunk3, thunk2]
+          return $ Constructor 0 [thunk1, thunk0]
+
+        (t, thunks) <- matchPatterns thunk
+          [ (ConstructorPattern listTypeRef "Nil" [], PrimBool False)
+          , (ConstructorPattern listTypeRef "Cons"
+             [ VariablePattern "x"
+             , ConstructorPattern listTypeRef "Cons"
+                 [ VariablePattern "y"
+                 , VariablePattern "z" ]], PrimBool True) ]
+
+        ctx <- mapM evalThunk thunks
+        return $ case ctx of
+          [Constructor 1 [], BaseTerm y, BaseTerm x] -> do
+            t @?= PrimBool True
+            x @?= PrimInt 1
+            y @?= PrimInt 2
+          _ -> assertFailure
+            "extra context should be [Constructor 1 [], BaseTerm _, BaseTerm _]"
   ]
 
 listTypeRef :: Ref (TypeDefinition Type Kind)
