@@ -1,6 +1,8 @@
 module Epic.Evaluation
   ( EvalTerm(..)
   , toEvalTerm
+  , Thunk
+  , evalThunk
   , evalWHNF
   ) where
 
@@ -10,7 +12,6 @@ import           Control.Monad.ST
 import           Data.List
 import qualified Data.Text as T
 
-import           Epic.Conversion
 import           Epic.Evaluation.Internal
 import           Epic.Language
 

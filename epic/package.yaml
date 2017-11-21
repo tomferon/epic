@@ -23,6 +23,7 @@ dependencies:
 
 default-extensions:
   - DeriveFunctor
+  - DeriveGeneric
   - FlexibleContexts
   - LambdaCase
   - OverloadedStrings

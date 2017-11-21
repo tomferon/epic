@@ -1,14 +1,14 @@
 module Epic.Evaluation.Internal where
 
-import Control.Lens
-import Control.Monad.Fix
-import Control.Monad.ST
+import           Control.Lens
+import           Control.Monad.Fix
+import           Control.Monad.ST
 
-import Data.List
-import Data.STRef
+import           Data.List
+import           Data.STRef
 import qualified Data.Text as T
 
-import Epic.Language
+import           Epic.Language
 
 -- | A wrapper around Term to augment it with values created with constructors
 -- and Haskell functions.
