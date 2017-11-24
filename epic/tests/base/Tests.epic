@@ -1,0 +1,12 @@
+module Tests
+
+import Data.List
+
+import Data.BoolTest
+import Data.ListTest
+import Data.TupleTest
+
+import TestHelpers
+
+allTests : List TestTree
+allTests = dataBoolTests :: dataListTests :: dataTupleTests :: Nil

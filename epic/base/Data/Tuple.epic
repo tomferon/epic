@@ -1,0 +1,26 @@
+module Data.Tuple
+
+type Pair a b = Pair a b
+type Triple a b c = Triple a b c
+type Tuple4 a b c d = Tuple4 a b c d
+type Tuple5 a b c d e = Tuple5 a b c d e
+
+fst : forall a b. Pair a b -> a
+fst = \p -> match p with
+  Pair x _ -> x
+
+snd : forall a b. Pair a b -> b
+snd = \p -> match p with
+  Pair _ x -> x
+
+fst3 : forall a b c. Triple a b c -> a
+fst3 = \p -> match p with
+  Triple x _ _ -> x
+
+snd3 : forall a b c. Triple a b c -> b
+snd3 = \p -> match p with
+  Triple _ x _ -> x
+
+trd3 : forall a b c. Triple a b c -> c
+trd3 = \p -> match p with
+  Triple _ _ x -> x

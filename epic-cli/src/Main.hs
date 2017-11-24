@@ -1,7 +1,6 @@
-import           Control.Monad
 import           Control.Monad.Except
 
-import           Data.List
+import           Data.Maybe
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
@@ -12,6 +11,7 @@ import           System.IO
 
 import qualified Codec.Archive.Tar as Tar
 
+import           Epic.Base
 import           Epic.Loader
 import           Epic.Options
 import           Epic.PrettyPrinter
@@ -21,14 +21,14 @@ import           Epic.TypeChecker
 main :: IO ()
 main = do
   opts@Options{..} <- parseOptions
-  absBase <- makeAbsolute optsBase
 
   eRes <- runExceptT $ do
-    (paths, modules) <- unzip <$> loadModules (optsBase : optsPaths) optsModules
+    (paths, modules) <- fmap unzip $
+      loadModules baseModules (optsBase : optsPaths) optsModules
     resolvedModules <- resolveModules modules
     typedModules <- typeCheckModules Nothing resolvedModules
     liftIO $ mapM_ (T.putStrLn . prettyPrint) typedModules
-    return $ map snd $ filter ((==optsBase) . fst) paths
+    return $ map snd $ filter ((==optsBase) . fst) $ catMaybes paths
 
   case eRes of
     Left err -> do

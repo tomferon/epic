@@ -10,6 +10,7 @@ import           Data.Functor.Foldable
 import qualified Data.Text as T
 
 import           Epic.Language
+import           Epic.PrettyPrinter
 import           Epic.TypeChecker.Internal
 
 import           Hedgehog
@@ -238,6 +239,44 @@ typeOfTests = testGroup "typeOf"
                  , ((ModuleName ["A"], "f"),  fDef) ]
 
       evalStateT (typeOf fqterm) st @?= Right (term, Type PrimTypeInt)
+
+  , testCase "returns forall a b. Pair a b -> a for the function fst" $ do
+      let pairFQDef = TypeDefinition "Pair" [(), ()]
+            [("Pair", [FQType (TypeVariable 1), FQType (TypeVariable 0)])]
+          pairFQRef = Ref (ModuleName ["A"]) "Pair" pairFQDef
+
+          pairDef = TypeDefinition "Pair" [Star, Star]
+                      [("Pair", [Type (TypeVariable 1), Type (TypeVariable 0)])]
+          pairRef = Ref (ModuleName ["A"]) "Pair" pairDef
+
+          fqterm = Abstraction Nothing
+                     (PatternMatch (Variable 0)
+                      [ ( ConstructorPattern pairFQRef "Pair"
+                            [VariablePattern "x", WildcardPattern]
+                        , Variable 0 )
+                      ])
+          term   = Abstraction Nothing
+                     (PatternMatch (Variable 0)
+                      [ ( ConstructorPattern pairRef "Pair"
+                            [VariablePattern "x", WildcardPattern]
+                        , Variable 0 )
+                      ])
+
+          -- forall a b. Pair a b -> a
+          typ = UniversalType
+                  (UniversalType
+                   (FunctionType
+                    (TypeApplication
+                     (TypeApplication
+                      (TypeConstructor pairRef)
+                      (TypeVariable 1))
+                     (TypeVariable 0))
+                    (TypeVariable 1)))
+
+          st = emptyTypeCheckerState & kindedDefinitions .~
+                 [ ((ModuleName ["A"], "Pair"), pairDef) ]
+
+      evalStateT (typeOf fqterm) st @?= Right (term, Type typ)
   ]
 
 unifyTests :: TestTree
@@ -366,36 +405,49 @@ kindCheckTypeDefinitionTests = testGroup "kindCheckTypeDefinition"
 
 typedTermGen :: Gen (FQTerm, (Term, Type))
 typedTermGen = Gen.choice
-  [ boolTermGen True True, intTermGen True True
+  [ boolTermGen True True
+  , intTermGen True True
+  , charTermGen True True
+  , stringTermGen True True
   , ifthenelseGen typedTermGen
   , applicationGen typedTermGen
   , do
       sub <- typedTermGen
-      input <- Gen.element [ (FQType PrimTypeInt, Type PrimTypeInt)
-                           , (FQType PrimTypeBool, Type PrimTypeBool) ]
+      input <- Gen.element [ (FQType PrimTypeInt,    Type PrimTypeInt)
+                           , (FQType PrimTypeBool,   Type PrimTypeBool)
+                           , (FQType PrimTypeChar,   Type PrimTypeChar)
+                           , (FQType PrimTypeString, Type PrimTypeString) ]
       abstractionGen input sub
   ]
 
 boolTermGen :: Bool -> Bool -> Gen (FQTerm, (Term, Type))
-boolTermGen doIf doApp = Gen.sized $ \size -> Gen.choice $
+boolTermGen = primTermGen
   [ return (PrimBool True,  (PrimBool True,  Type PrimTypeBool))
   , return (PrimBool False, (PrimBool False, Type PrimTypeBool)) ]
-  ++ (if size > 1 && doIf
-        then [Gen.small (ifthenelseGen (boolTermGen False doApp))]
-        else [])
-  ++ (if size > 1 && doApp
-        then [Gen.small (applicationGen (boolTermGen doIf False))]
-        else [])
 
 intTermGen :: Bool -> Bool -> Gen (FQTerm, (Term, Type))
-intTermGen doIf doApp = Gen.sized $ \size -> Gen.choice $
-  [ Gen.int (Range.linear 0 1000) >>= \i ->
-      return (PrimInt i, (PrimInt i, Type PrimTypeInt)) ]
+intTermGen = primTermGen
+  [ (\i -> (PrimInt i, (PrimInt i, Type PrimTypeInt)))
+    <$> Gen.int (Range.linear 0 1000) ]
+
+charTermGen :: Bool -> Bool -> Gen (FQTerm, (Term, Type))
+charTermGen = primTermGen
+  [ (\c -> (PrimChar c, (PrimChar c, Type PrimTypeChar))) <$> Gen.unicode ]
+
+stringTermGen :: Bool -> Bool -> Gen (FQTerm, (Term, Type))
+stringTermGen = primTermGen
+  [ (\t -> (PrimString t, (PrimString t, Type PrimTypeString)))
+    <$> Gen.text (Range.linear 0 1000) Gen.unicode ]
+
+primTermGen :: [Gen (FQTerm, (Term, Type))] -> Bool -> Bool
+            -> Gen (FQTerm, (Term, Type))
+primTermGen baseGens doIf doApp = Gen.sized $ \size -> Gen.choice $
+  baseGens
   ++ (if size > 1 && doIf
-        then [Gen.small (ifthenelseGen (intTermGen False doApp))]
-        else [])
+       then [Gen.small (ifthenelseGen (primTermGen baseGens False doApp))]
+       else [])
   ++ (if size > 1 && doApp
-        then [Gen.small (applicationGen (intTermGen doIf False))]
+        then [Gen.small (applicationGen (primTermGen baseGens doIf False))]
         else [])
 
 ifthenelseGen :: Gen (FQTerm, (Term, Type)) -> Gen (FQTerm, (Term, Type))

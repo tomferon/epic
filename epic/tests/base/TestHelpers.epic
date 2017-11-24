@@ -1,0 +1,7 @@
+module TestHelpers
+
+import Data.List
+
+type TestTree
+  = TestGroup String (List TestTree)
+  | Test String String

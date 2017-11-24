@@ -1,6 +1,7 @@
 module Epic.Evaluation.Internal where
 
 import           Control.Lens
+import           Control.Monad
 import           Control.Monad.Fix
 import           Control.Monad.ST
 
@@ -16,7 +17,20 @@ data EvalTerm s
   = BaseTerm Term
   | TermWithContext Term [Thunk s]
   | Constructor Int [Thunk s] -- ^ Parameters in reverse order
-  | HaskellFunction (EvalTerm s -> ST s (EvalTerm s))
+  | HaskellFunction (Thunk s -> ST s (EvalTerm s))
+
+debugShowEvalTerm :: Int -> EvalTerm s -> ST s String
+debugShowEvalTerm 0 = \_ -> return "(max depth reached)"
+debugShowEvalTerm depth = \case
+  BaseTerm t -> return $ "BaseTerm (" ++ show t ++ ")"
+  TermWithContext t ts -> do
+    strs <- mapM (debugShowEvalTerm (depth-1) <=< evalThunk) ts
+    return $
+      "TermWithContext (" ++ show t ++ ") [" ++ intercalate ", " strs ++ "]"
+  Constructor i ts -> do
+    strs <- mapM (debugShowEvalTerm (depth-1) <=< evalThunk) ts
+    return $ "Constructor " ++ show i ++ " [" ++ intercalate ", " strs ++ "]"
+  HaskellFunction _ -> return "HaskellFunction _"
 
 toEvalTerm :: Term -> EvalTerm s
 toEvalTerm = BaseTerm
@@ -38,8 +52,8 @@ makeThunk f = do
   ref <- newSTRef Nothing
   return $ Thunk f ref
 
-evalWHNFCtx :: [Thunk s] -> [(T.Text, EvalTerm s -> ST s (EvalTerm s))]
-            -> EvalTerm s -> ST s (EvalTerm s)
+evalWHNFCtx :: [Thunk s] -> [(T.Text, EvalTerm s)] -> EvalTerm s
+            -> ST s (EvalTerm s)
 evalWHNFCtx ctx foreigns = \case
   BaseTerm (Variable i) -> case ctx ^? element i of
     Nothing -> error "variable out of bound"
@@ -51,7 +65,7 @@ evalWHNFCtx ctx foreigns = \case
   BaseTerm (Reference (Ref _ _ (Definition (ForeignDefinition name _)))) ->
     case lookup name foreigns of
       Nothing -> error "wrong foreign reference"
-      Just f  -> return $ HaskellFunction f
+      Just et -> return et
 
   BaseTerm (ConstructorReference (Ref _ _ def) cname) ->
     case findIndex ((==cname) . fst) (def ^. constructors) of
@@ -70,7 +84,7 @@ evalWHNFCtx ctx foreigns = \case
 
       TermWithContext (Abstraction _ t'') ctx' -> do
         et' <- makeThunk $ evalWHNFCtx ctx foreigns $ toEvalTerm t'
-        evalWHNFCtx (et' : ctx ++ ctx') foreigns (toEvalTerm t'')
+        evalWHNFCtx (et' : ctx') foreigns (toEvalTerm t'')
 
       BaseTerm FixTerm -> case t' of
         Abstraction _ t'' -> do
@@ -83,7 +97,9 @@ evalWHNFCtx ctx foreigns = \case
         et' <- makeThunk $ evalWHNFCtx ctx foreigns $ toEvalTerm t'
         return $ Constructor i (et' : xs)
 
-      HaskellFunction f -> f (toEvalTerm t')
+      HaskellFunction f -> do
+        et' <- makeThunk $ evalWHNFCtx ctx foreigns $ toEvalTerm t'
+        f et'
 
       _ -> error "wrong application"
 

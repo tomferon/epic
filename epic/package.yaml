@@ -30,6 +30,7 @@ default-extensions:
   - PatternSynonyms
   - TemplateHaskell
   - TupleSections
+  - TypeApplications
 
 library:
   source-dirs:        src
@@ -37,6 +38,7 @@ library:
     - deriving-compat
     - directory
     - filepath
+    - template-haskell
 
 tests:
   unit-tests:

@@ -1,0 +1,74 @@
+module Data.Int
+
+import Data.Tuple
+
+foreign data_int_eqInt : Int -> Int -> Bool
+eqInt = data_int_eqInt
+foreign data_int_neqInt : Int -> Int -> Bool
+neqInt = data_int_neqInt
+
+foreign data_int_leInt : Int -> Int -> Bool
+leInt = data_int_leInt
+foreign data_int_ltInt : Int -> Int -> Bool
+ltInt = data_int_ltInt
+foreign data_int_geInt : Int -> Int -> Bool
+geInt = data_int_geInt
+foreign data_int_gtInt : Int -> Int -> Bool
+gtInt = data_int_gtInt
+
+foreign data_int_showInt : Int -> String
+showInt = data_int_showInt
+
+foreign data_int_addInt : Int -> Int -> Int
+addInt = data_int_addInt
+foreign data_int_subtractInt : Int -> Int -> Int
+subtractInt = data_int_subtractInt
+foreign data_int_multiplyInt : Int -> Int -> Int
+multiplyInt = data_int_multiplyInt
+
+foreign data_int_quot : Int -> Int -> Int
+quot = data_int_quot
+foreign data_int_rem : Int -> Int -> Int
+rem = data_int_rem
+foreign data_int_div : Int -> Int -> Int
+div = data_int_div
+foreign data_int_mod : Int -> Int -> Int
+mod = data_int_mod
+
+foreign data_int_quotRem : Int -> Int -> Pair Int Int
+quotRem = data_int_quotRem
+foreign data_int_divMod : Int -> Int -> Pair Int Int
+divMod = data_int_divMod
+
+== : Int -> Int -> Bool
+== = eqInt
+
+!= : Int -> Int -> Bool
+!= = neqInt
+
+<= : Int -> Int -> Bool
+<= = leInt
+
+>= : Int -> Int -> Bool
+>= = geInt
+
+< : Int -> Int -> Bool
+< = ltInt
+
+> : Int -> Int -> Bool
+> = gtInt
+
++ : Int -> Int -> Int
++ = addInt
+
+- : Int -> Int -> Int
+- = subtractInt
+
+* : Int -> Int -> Int
+* = multiplyInt
+
+/ : Int -> Int -> Int
+/ = quot
+
+% : Int -> Int -> Int
+% = rem

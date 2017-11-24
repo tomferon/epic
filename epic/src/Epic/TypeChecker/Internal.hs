@@ -34,7 +34,7 @@ substMetas ms m = foldr (\(i,t') t -> substMeta i t' t) m ms
 fromMetaType :: [(Int, MetaType)] -> MetaType -> Either T.Text Type
 fromMetaType mts mt = do
     let mt' = substMetas mts mt
-        indices = cata collectIndices mt'
+        indices = reverse $ cata collectIndices mt'
     t <- go 0 indices mt'
     return $ Type $ addUniversals indices t
 
@@ -42,9 +42,9 @@ fromMetaType mts mt = do
     collectIndices :: MetaF (TypePF tyref) [Int] -> [Int]
     collectIndices = \case
       MetaIndexF i -> [i]
-      MetaBase (FunctionTypeF is is') -> is' `union` is
+      MetaBase (FunctionTypeF is is') -> is `union` is'
       MetaBase (UniversalTypeF is) -> is
-      MetaBase (TypeApplicationF is is') -> is' `union` is
+      MetaBase (TypeApplicationF is is') -> is `union` is'
       _ -> []
 
     go :: Int -> [Int] -> MetaType
@@ -60,6 +60,8 @@ fromMetaType mts mt = do
       UniversalTypeM t -> UniversalType <$> go (base + 1) indices t
       PrimTypeBoolM -> return PrimTypeBool
       PrimTypeIntM -> return PrimTypeInt
+      PrimTypeCharM -> return PrimTypeChar
+      PrimTypeStringM -> return PrimTypeString
       TypeConstructorM ref -> return $ TypeConstructor ref
       TypeApplicationM t t' ->
         TypeApplication <$> go base indices t <*> go base indices t'
@@ -126,6 +128,8 @@ addMetaType = addMeta checkOccurence typeConstraints
       UniversalTypeM t -> checkOccurence i t
       PrimTypeBoolM -> False
       PrimTypeIntM -> False
+      PrimTypeCharM -> False
+      PrimTypeStringM -> False
       TypeConstructorM _ -> False
       TypeApplicationM t t' -> checkOccurence i t || checkOccurence i t'
 
@@ -271,8 +275,10 @@ typeCheck ctx fqterm = case fqterm of
     mt <- getMetaType i
     return (IfThenElse tec' te1' te2', mt)
 
-  PrimBool b -> return (PrimBool b, PrimTypeBoolM)
-  PrimInt i -> return (PrimInt i, PrimTypeIntM)
+  PrimBool   b -> return (PrimBool   b, PrimTypeBoolM)
+  PrimInt    i -> return (PrimInt    i, PrimTypeIntM)
+  PrimChar   c -> return (PrimChar   c, PrimTypeCharM)
+  PrimString t -> return (PrimString t, PrimTypeStringM)
 
   FixTerm -> do
     -- fix : forall a. (a -> a) -> a
@@ -313,6 +319,8 @@ typeCheckPatternMatch ctx te pairs = do
 
       return (missing', f . ((pat', te') :))
 
+-- | Return a typed and kinded pattern together with its meta type and the meta
+-- types of the variable pattern inside it in reverse order (the extra context.)
 typeCheckPattern :: FQPattern -> TypeChecker (Pattern, MetaType, [MetaType])
 typeCheckPattern = \case
   WildcardPattern ->  (\(_,mt) -> (WildcardPattern, mt, [])) <$> newMetaVar
@@ -338,9 +346,9 @@ typeCheckPattern = \case
       return sub
 
     let patterns' = map (\(p,_,_) -> p) subs
-        extraCtx  = concatMap (\(_,_,c) -> c) subs
+        extraCtx  = foldl' (\acc (_,_,c) -> c ++ acc) [] subs
         ref'      = Ref mname name def'
-        mt = foldl' TypeApplicationM (TypeConstructorM ref') varMetaTypes
+        mt = foldr (flip TypeApplicationM) (TypeConstructorM ref') varMetaTypes
 
     return (ConstructorPattern ref' cname patterns', mt, extraCtx)
 
@@ -372,8 +380,11 @@ unify l r = case (l, r) of
 
     -- FIXME: (UniversalTypeM ty1, ty2) -> remove potentially useless forall
 
-    (PrimTypeBoolM, PrimTypeBoolM) -> return ()
-    (PrimTypeIntM, PrimTypeIntM) -> return ()
+    (PrimTypeBoolM,   PrimTypeBoolM)   -> return ()
+    (PrimTypeIntM,    PrimTypeIntM)    -> return ()
+    (PrimTypeCharM,   PrimTypeCharM)   -> return ()
+    (PrimTypeStringM, PrimTypeStringM) -> return ()
+
     (TypeConstructorM ref, TypeConstructorM ref')
       | ref == ref' -> return ()
     (TypeApplicationM ty1 ty1', TypeApplicationM ty2 ty2') -> do
@@ -419,6 +430,8 @@ unify l r = case (l, r) of
         return (UniversalTypeM t', acc')
       PrimTypeBoolM -> return (PrimTypeBoolM, acc)
       PrimTypeIntM -> return (PrimTypeIntM, acc)
+      PrimTypeCharM -> return (PrimTypeCharM, acc)
+      PrimTypeStringM -> return (PrimTypeStringM, acc)
       TypeConstructorM ref -> return (TypeConstructorM ref, acc)
       TypeApplicationM t1 t2 -> do
         (t1', acc')  <- monomorphiseType threshold acc  t1
@@ -452,6 +465,8 @@ substDeBruijnIndex base repl = \case
   UniversalTypeM t -> UniversalTypeM (substDeBruijnIndex (base+1) repl t)
   PrimTypeBoolM -> PrimTypeBoolM
   PrimTypeIntM -> PrimTypeIntM
+  PrimTypeCharM -> PrimTypeCharM
+  PrimTypeStringM -> PrimTypeStringM
   TypeConstructorM ref -> TypeConstructorM ref
   TypeApplicationM t t' -> TypeApplicationM (substDeBruijnIndex base repl t)
                                             (substDeBruijnIndex base repl t')
@@ -580,8 +595,10 @@ kindCheck vars = \case
     lift $ unifyKind k StarM
     return (UniversalType t, StarM)
 
-  PrimTypeBool -> return (PrimTypeBool, StarM)
-  PrimTypeInt -> return (PrimTypeInt, StarM)
+  PrimTypeBool   -> return (PrimTypeBool,   StarM)
+  PrimTypeInt    -> return (PrimTypeInt,    StarM)
+  PrimTypeChar   -> return (PrimTypeChar,   StarM)
+  PrimTypeString -> return (PrimTypeString, StarM)
 
   TypeConstructor (Ref mname name fqdef) -> do
     mOwn <- ask

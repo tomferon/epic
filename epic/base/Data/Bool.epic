@@ -1,0 +1,12 @@
+module Data.Bool
+
+foreign data_bool_and : Bool -> Bool -> Bool
+and = data_bool_and
+foreign data_bool_or : Bool -> Bool -> Bool
+or = data_bool_or
+
+&& : Bool -> Bool -> Bool
+&& = and
+
+|| : Bool -> Bool -> Bool
+|| = or

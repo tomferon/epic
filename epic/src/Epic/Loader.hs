@@ -7,25 +7,27 @@ import           Data.Monoid
 import qualified Data.Text    as T
 import qualified Data.Text.IO as T
 
-import           System.Directory (doesFileExist, makeAbsolute)
+import           System.Directory (doesFileExist)
 import           System.FilePath ((</>), (<.>))
 
-import           Epic.Language hiding (name)
+import           Epic.Language
 import           Epic.Parser
 import           Epic.PrettyPrinter
 
-loadModules :: (MonadIO m, MonadError T.Text m) => [FilePath] -> [ModuleName]
-            -> m [((FilePath, FilePath), Module)]
-loadModules dirs = go []
+loadModules :: (MonadIO m, MonadError T.Text m) => [Module] -> [FilePath]
+            -> [ModuleName]
+            -> m [(Maybe (FilePath, FilePath), Module)]
+loadModules preloadedModules dirs = go (map (Nothing,) preloadedModules)
   where
-    go :: (MonadIO m, MonadError T.Text m) => [((FilePath, FilePath), Module)]
-       -> [ModuleName] -> m [((FilePath, FilePath), Module)]
+    go :: (MonadIO m, MonadError T.Text m)
+       => [(Maybe (FilePath, FilePath), Module)] -> [ModuleName]
+       -> m [(Maybe (FilePath, FilePath), Module)]
     go acc [] = return acc
     go acc (name : names)
       | name `elem` map (_moduleName . snd) acc = go acc names
       | otherwise = do
-          res@(_, _mod) <- loadModule dirs name
-          go (res : acc) (names ++ _mod ^. imports)
+          (paths, _mod) <- loadModule dirs name
+          go ((Just paths, _mod) : acc) (names ++ _mod ^. imports)
 
 loadModule :: (MonadIO m, MonadError T.Text m) => [FilePath] -> ModuleName
            -> m ((FilePath, FilePath), Module)

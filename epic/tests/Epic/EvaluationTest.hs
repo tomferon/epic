@@ -44,8 +44,9 @@ evalWHNFTests = testGroup "evalWHNF"
 
   , testCase "evaluates a foreign reference to the corresponding Haskell\
               \ function" $ do
-      let inc (BaseTerm (PrimInt x)) = return $ BaseTerm (PrimInt (x+1))
-          inc _ = undefined
+      let inc thunk = do
+            BaseTerm (PrimInt x) <- evalThunk thunk
+            return $ BaseTerm (PrimInt (x+1))
 
           incType = Type (FunctionType PrimTypeInt PrimTypeInt)
           incDef  = Definition (ForeignDefinition "inc" incType)
@@ -54,7 +55,7 @@ evalWHNFTests = testGroup "evalWHNF"
           term = Application (Reference incRef) (PrimInt 42)
 
       join $ stToIO $ do
-        res <- evalWHNF [("inc", inc)] term
+        res <- evalWHNF [("inc", HaskellFunction inc)] term
         return $ case res of
           BaseTerm t -> t @?= PrimInt 43
           _ -> assertFailure "should be BaseTerm"
@@ -130,10 +131,10 @@ evalWHNFTests = testGroup "evalWHNF"
       join $ stToIO $ do
         calledRef <- newSTRef False
 
-        let inc (BaseTerm (PrimInt x)) = do
+        let inc thunk = do
               writeSTRef calledRef True
+              BaseTerm (PrimInt x) <- evalThunk thunk
               return $ BaseTerm (PrimInt (x+1))
-            inc _ = undefined
 
             incType = Type (FunctionType PrimTypeInt PrimTypeInt)
             incDef  = Definition (ForeignDefinition "inc" incType)
@@ -145,7 +146,7 @@ evalWHNFTests = testGroup "evalWHNF"
                     (Application (Reference incRef) (PrimInt 42)))
                    (ConstructorReference listTypeRef "Nil")
 
-        res <- evalWHNF [("inc", inc)] term
+        res <- evalWHNF [("inc", HaskellFunction inc)] term
         case res of
           Constructor 0 [_, thunk] -> do
             called  <- readSTRef calledRef

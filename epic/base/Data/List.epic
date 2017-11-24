@@ -1,0 +1,21 @@
+module Data.List
+
+import Data.Bool
+
+type List a = Nil | Cons a (List a)
+
+eqList : forall a. (a -> a -> Bool) -> List a -> List a -> Bool
+eqList = fix \rec -> \f -> \l -> \r ->
+  match l with
+    Cons x xs -> (match r with
+                    Cons y ys -> (f x y && rec f xs ys)
+                    Nil -> false)
+    Nil -> (match r with
+              Cons _ _ -> false
+              Nil -> true)
+
+singleton : forall a. a -> List a
+singleton = \x -> Cons x Nil
+
+:: : forall a. a -> List a -> List a
+:: = Cons

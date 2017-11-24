@@ -1,0 +1,25 @@
+module Data.ListTest
+
+import Data.Int
+import Data.List
+
+import TestHelpers
+
+eqListTests : TestTree
+eqListTests = TestGroup "eqList"
+  (Test "returns true when the lists are equal according to the given function"
+        (if eqList eqInt (1 :: 2 :: 3 :: Nil) (1 :: 2 :: 3 :: Nil)
+         then "" else "returned false")
+   :: Test "returns true when the lists are empty"
+           (if eqList eqInt Nil Nil then "" else "returned false")
+   :: Test "returns false when the first list is shorter"
+           (if eqList eqInt (1 :: 2 :: Nil) (1 :: 2 :: 3 :: Nil)
+            then "returned true" else "")
+   :: Test "returns false when the second list is shorter"
+           (if eqList eqInt (1 :: 2 :: 3 :: Nil) (1 :: 2 :: Nil)
+            then "returned true" else "")
+   :: Nil)
+
+dataListTests : TestTree
+dataListTests = TestGroup "Data.List"
+  (eqListTests :: Nil)

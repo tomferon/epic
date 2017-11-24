@@ -18,6 +18,5 @@ import           Epic.Language
 -- FIXME: Replace calls to 'error' by a custom exception.
 
 -- | Evaluate a term into its weak head normal form.
-evalWHNF :: [(T.Text, EvalTerm s -> ST s (EvalTerm s))] -> Term
-         -> ST s (EvalTerm s)
+evalWHNF :: [(T.Text, EvalTerm s)] -> Term -> ST s (EvalTerm s)
 evalWHNF foreigns = evalWHNFCtx [] foreigns . toEvalTerm

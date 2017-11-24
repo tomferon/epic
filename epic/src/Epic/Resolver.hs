@@ -50,7 +50,7 @@ buildEnvironment allModules mname =
     go acc (name : names) = do
       case find ((== name) . _moduleName) allModules of
         Nothing -> throwError $ "can't find module " <> prettyPrint name
-                                <> " when building type checking environment"
+                                <> " when building resolver environment"
         Just _mod -> go (_mod : acc) names -- reversed order!
 
 resolveModules :: MonadError T.Text m => [Module] -> m [FQModule]
@@ -117,6 +117,8 @@ resolveType' env mOwnRef = fmap (fmap FQType) . cata phi
       UniversalTypeF t -> (\f tdef -> UniversalType (f tdef)) <$> t
       PrimTypeBoolF -> return $ const PrimTypeBool
       PrimTypeIntF -> return $ const PrimTypeInt
+      PrimTypeCharF -> return $ const PrimTypeChar
+      PrimTypeStringF -> return $ const PrimTypeString
       TypeConstructorF ref -> do
         f <- case (mOwnRef, ref) of
           (Just (ownModuleName, ownName), NameReference name)
@@ -209,6 +211,8 @@ resolveTerm env = go
                               branches
       PrimBool b -> return $ PrimBool b
       PrimInt i -> return $ PrimInt i
+      PrimChar c -> return $ PrimChar c
+      PrimString s -> return $ PrimString s
       FixTerm -> return FixTerm
 
 resolvePattern :: MonadError T.Text m => ResolverEnvironment -> LocalPattern

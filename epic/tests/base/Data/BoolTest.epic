@@ -1,0 +1,31 @@
+module Data.BoolTest
+
+import Data.Bool
+import Data.List
+
+import TestHelpers
+
+# These tests are a bit useless, but they served to test the integration of the
+# tests themselves. And they still serve as an example of tests.
+
+andTests : TestTree
+andTests = TestGroup "and"
+  (Test "returns true for true/true"
+        (if true && true then "" else "returned false")
+   :: Test "returns false otherwise"
+           (if (false && true) || (true && false) || (false && false)
+            then "returned true" else "")
+   :: Nil)
+
+orTests : TestTree
+orTests = TestGroup "or"
+  (Test "returns false for false/false"
+        (if false || false then "returned true" else "")
+   :: Test "returns true otherwise"
+           (if (false || true) && (true || false) && (true || true)
+            then "" else "returned false")
+   :: Nil)
+
+dataBoolTests : TestTree
+dataBoolTests = TestGroup "Data.Bool"
+  (andTests :: orTests :: Nil)

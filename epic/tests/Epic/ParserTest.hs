@@ -29,6 +29,7 @@ parserTests = testGroup "Epic.Parser"
   -- Helpers for termParser
   , variableOrReferenceTests, constructorReferenceTests, abstractionTests
   , ifthenelseTests, applicationTests, patternMatchTests, operationTests
+  , intTermTests, charTermTests, stringTermTests
   -- Helpers for typeParser
   , forallTests, functionTests, typeApplicationTests
   -- Generic helpers
@@ -208,6 +209,38 @@ operationTests = testGroup "operation"
       parseOnly (operation "" [] (PrimInt 1) operators) txt @?= Right term
   ]
 
+intTermTests :: TestTree
+intTermTests = testGroup "intTerm"
+  [ testCase "parses a simple integer" $
+      parseOnly intTerm "123" @?= Right (PrimInt 123)
+
+  , testCase "parses a negative number" $
+      parseOnly intTerm "-1" @?= Right (PrimInt (-1))
+  ]
+
+charTermTests :: TestTree
+charTermTests = testGroup "charTerm"
+  [ testCase "parses a single character" $
+      parseOnly charTerm "'d'" @?= Right (PrimChar 'd')
+
+  , testCase "parses an escaped character" $ do
+      parseOnly charTerm "'\\\\'" @?= Right (PrimChar '\\')
+      parseOnly charTerm "'\\''"  @?= Right (PrimChar '\'')
+      parseOnly charTerm "'\\n'"  @?= Right (PrimChar '\n')
+  ]
+
+stringTermTests :: TestTree
+stringTermTests = testGroup "stringTerm"
+  [ testCase "parses a simple string" $
+      parseOnly stringTerm "\"hello\"" @?= Right (PrimString "hello")
+
+  , testCase "parses a string containing escape quotes" $
+      parseOnly stringTerm "\"he\\\"llo\"" @?= Right (PrimString "he\"llo")
+
+  , testCase "parses escaped characters inside the string" $
+      parseOnly stringTerm "\"\\n\\t\"" @?= Right (PrimString "\n\t")
+  ]
+
 forallTests :: TestTree
 forallTests = testGroup "forall"
   [ testProperty "parses a type beginning with forall" $ property $ do
@@ -249,9 +282,6 @@ operatorTests = testGroup "operator"
 
   , testCase "doesn't parse if it starts with a dot" $
       assert $ isLeft $ parseOnly operator ".+"
-
-  , testCase "doesn't parse if it starts with a colon" $
-    assert $ isLeft $ parseOnly operator ":+"
 
   , testCase "parses +:" $ parseOnly operator "+:" @?= Right "+:"
   , testCase "parses +." $ parseOnly operator "+." @?= Right "+."

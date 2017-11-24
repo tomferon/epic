@@ -1,0 +1,41 @@
+module Data.TupleTest
+
+import Data.Int
+import Data.List
+import Data.Tuple
+
+import TestHelpers
+
+fstTests : TestTree
+fstTests = TestGroup "fst"
+  (Test "returns the left element of the pair"
+        (if fst (Pair 3 4) == 3 then "" else "did not return 3")
+   :: Nil)
+
+sndTests : TestTree
+sndTests = TestGroup "snd"
+  (Test "returns the right element of the pair"
+        (if snd (Pair 3 4) == 4 then "" else "did not return 4")
+   :: Nil)
+
+fst3Tests : TestTree
+fst3Tests = TestGroup "fst3"
+  (Test "returns the left element of the triple"
+        (if fst3 (Triple 1 2 3) == 1 then "" else "did not return 1")
+   :: Nil)
+
+snd3Tests : TestTree
+snd3Tests = TestGroup "snd3"
+  (Test "returns the middle element of the triple"
+        (if snd3 (Triple 1 2 3) == 2 then "" else "did not return 2")
+   :: Nil)
+
+trd3Tests : TestTree
+trd3Tests = TestGroup "trd3"
+  (Test "returns the right element of the triple"
+        (if trd3 (Triple 1 2 3) == 3 then "" else "did not return 3")
+   :: Nil)
+
+dataTupleTests : TestTree
+dataTupleTests = TestGroup "Data.Tuple"
+  (fstTests :: sndTests :: fst3Tests :: snd3Tests :: trd3Tests :: Nil)

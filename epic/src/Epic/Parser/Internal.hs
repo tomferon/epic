@@ -23,6 +23,7 @@ operators =
      , Operator (beginsWith '<') False
      , Operator (beginsWith '>') False
      , Operator (beginsWith '=') True
+     , Operator (beginsWith '!') True
      , Operator (beginsWith '~') False
      , Operator (beginsWith ':') True
      , Operator (beginsWith '+') True
@@ -31,7 +32,6 @@ operators =
      , Operator (beginsWith '*') True
      , Operator (beginsWith '/') False
      , Operator (beginsWith '%') False
-     , Operator (beginsWith '!') True
      , Operator (beginsWith '$') False
      , Operator (beginsWith '^') False
      ]
@@ -103,15 +103,16 @@ termParser :: T.Text -> [Operator] -> Bool -> Bool -> Bool -> Bool -> [T.Text]
 termParser indent ops doAbs doIf doMatch doApp vars =
   (if doAbs then abstraction indent vars else empty)
   <|> (if doIf then ifthenelse indent vars else empty)
+  <|> (if doMatch then patternMatch indent vars else empty)
   <|>
   (do
-    term <- (if doMatch then patternMatch indent vars else empty)
-      <|> (if doApp then application indent vars else empty)
+    term <-
+      (if doApp then application indent vars else empty)
       <|> (char '('
            *> termParser indent operators True True True True vars
            <* char ')')
        <|> variableOrReference vars <|> constructorReference
-       <|> fixTerm <|> boolTerm <|> intTerm
+       <|> fixTerm <|> boolTerm <|> intTerm <|> charTerm <|> stringTerm
     operation indent vars term ops <|> return term)
 
 typeParser :: T.Text -> Bool -> Bool -> Bool -> [T.Text] -> Parser LocalType
@@ -120,7 +121,8 @@ typeParser indent doForall doFunc doApp vars = do
   <|> (if doFunc then function indent vars else empty)
   <|> (if doApp then typeApplication indent vars else empty)
   <|> (char '(' *> typeParser indent True True True vars <* char ')')
-  <|> intType <|> boolType <|> typeCons <|> typeVariable vars
+  <|> intType <|> boolType <|> charType <|> stringType
+  <|> typeCons <|> typeVariable vars
 
 patternParser :: T.Text -> Bool -> Parser (LocalPattern, [T.Text])
 patternParser indent doConstructor = do
@@ -171,7 +173,7 @@ importParser = do
 
 termDefinition :: Parser ModulePart
 termDefinition = do
-  name <- identifier
+  name <- identifier <|> operator
   _ <- sep " "
   _ <- char '='
   indent <- sep " "
@@ -180,7 +182,7 @@ termDefinition = do
 
 signature :: Parser ModulePart
 signature = do
-  name <- identifier
+  name <- identifier <|> operator
   _ <- sep " "
   _ <- char ':'
   indent <- sep " "
@@ -325,6 +327,51 @@ intTerm =
   ((PrimInt . read) <$> some digit)
   <|> (char '-' *> ((PrimInt . read . ('-' :)) <$> some digit))
 
+charTerm :: Parser LocalTerm
+charTerm = do
+  _ <- char '\''
+  c  <- anyChar
+  c' <- if c == '\\'
+          then escapedCharacter
+          else return c
+  _ <- char '\''
+  return $ PrimChar c'
+
+-- | Consume one character after a basckslash and return the corresponding
+-- escaped character.
+escapedCharacter :: Parser Char
+escapedCharacter = do
+  c <- anyChar
+  case c of
+    '\'' -> return '\''
+    '"'  -> return '"'
+    '\\' -> return '\\'
+    'n'  -> return '\n'
+    'r'  -> return '\r'
+    't'  -> return '\t'
+    _    -> fail $ "invalid escape character " ++ show c
+
+stringTerm :: Parser LocalTerm
+stringTerm = do
+    _ <- char '"'
+    str <- consumeString ""
+    _ <- char '"'
+    return $ PrimString str
+
+  where
+    consumeString :: T.Text -> Parser T.Text
+    consumeString acc = do
+      c <- peekChar'
+      case c of
+        '"' -> return acc
+        '\\' -> do
+          _ <- anyChar
+          c <- escapedCharacter
+          consumeString (acc <> T.singleton c)
+        _ -> do
+          part <- takeWhile1 (\c -> c /= '"' && c /= '\\')
+          consumeString (acc <> part)
+
 operation :: T.Text -> [T.Text] -> LocalTerm -> [Operator] -> Parser LocalTerm
 operation indent vars term ops = do
     parts <- (\f -> f []) <$> consumeOperations (Right term :)
@@ -409,6 +456,12 @@ intType = string "Int" >> return PrimTypeInt
 boolType :: Parser LocalType
 boolType = string "Bool" >> return PrimTypeBool
 
+charType :: Parser LocalType
+charType = string "Char" >> return PrimTypeChar
+
+stringType :: Parser LocalType
+stringType = string "String" >> return PrimTypeString
+
 typeVariable :: [T.Text] -> Parser LocalType
 typeVariable vars = do
   name <- identifier
@@ -443,8 +496,10 @@ isOpChar = (`elem` ("+-*/.<>=?|!@$%^&~:;" :: String))
 operator :: Parser T.Text
 operator = do
   c <- peekChar'
-  guard $ c `elem` ("+-*/<>=?|!@$%^&~;" :: String)
-  takeWhile1 isOpChar
+  guard $ c `elem` ("+-*/<>=?|!@$%^&~;:" :: String)
+  op <- takeWhile1 isOpChar
+  guard $ op /= "->" && op /= ":"
+  return op
 
 comment :: Parser ()
 comment = do

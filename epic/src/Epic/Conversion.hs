@@ -8,13 +8,15 @@ module Epic.Conversion
   , GFromEpic(..)
   ) where
 
-import GHC.Generics
+import           GHC.Generics
 
-import Control.Monad
-import Control.Monad.ST
+import           Control.Monad
+import           Control.Monad.ST
 
-import Epic.Evaluation.Internal
-import Epic.Language
+import qualified Data.Text as T
+
+import           Epic.Evaluation.Internal
+import           Epic.Language
 
 class GToEpic f where
   -- | FIXME: eval terms in reversed order
@@ -57,8 +59,14 @@ instance ToEpic Bool where
 instance ToEpic Int where
   toEpic = return . BaseTerm . PrimInt
 
+instance ToEpic Char where
+  toEpic = return . BaseTerm . PrimChar
+
+instance ToEpic T.Text where
+  toEpic = return . BaseTerm . PrimString
+
 instance (FromEpic a, ToEpic b) => ToEpic (a -> b) where
-  toEpic f = return $ HaskellFunction $ toEpic . f <=< fromEpic
+  toEpic f = return $ HaskellFunction $ toEpic . f <=< fromEpic <=< evalThunk
 
 instance ToEpic ()
 
@@ -115,6 +123,14 @@ instance FromEpic Bool where
 instance FromEpic Int where
   fromEpic (BaseTerm (PrimInt x)) = return x
   fromEpic _ = error "can't convert Int"
+
+instance FromEpic Char where
+  fromEpic (BaseTerm (PrimChar x)) = return x
+  fromEpic _ = error "can't convert Char"
+
+instance FromEpic T.Text where
+  fromEpic (BaseTerm (PrimString x)) = return x
+  fromEpic _ = error "can't convert T.Text"
 
 instance FromEpic ()
 
