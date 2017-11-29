@@ -11,6 +11,7 @@ module Epic.Base
   , dataIntForeigns
   , dataListModule
   , dataTupleModule
+  , dataUnitModule
   ) where
 
 import           Control.Monad.ST
@@ -26,7 +27,7 @@ import           Epic.TH
 baseModules :: [Module]
 baseModules =
   [ dataBoolModule, dataCharModule, dataIntModule, dataListModule
-  , dataTupleModule
+  , dataTupleModule, dataUnitModule
   ]
 
 baseForeigns :: ST s [(T.Text, EvalTerm s)]
@@ -181,3 +182,6 @@ dataListModule = $(readModule "base/Data/List.epic")
 
 dataTupleModule :: Module
 dataTupleModule = $(readModule "base/Data/Tuple.epic")
+
+dataUnitModule :: Module
+dataUnitModule = $(readModule "base/Data/Unit.epic")

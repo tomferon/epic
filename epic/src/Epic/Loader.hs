@@ -14,6 +14,11 @@ import           Epic.Language
 import           Epic.Parser
 import           Epic.PrettyPrinter
 
+loadModules' :: (MonadIO m, MonadError T.Text m) => [Module] -> [FilePath]
+             -> [ModuleName] -> m [Module]
+loadModules' preloadedModules paths mnames =
+  fmap (map snd) (loadModules preloadedModules paths mnames)
+
 loadModules :: (MonadIO m, MonadError T.Text m) => [Module] -> [FilePath]
             -> [ModuleName]
             -> m [(Maybe (FilePath, FilePath), Module)]

@@ -2,6 +2,7 @@ resolver: nightly-2017-08-15
 packages:
 - epic
 - epic-cli
+- example
 extra-deps:
 - tasty-hedgehog-0.1.0.1
 flags: {}

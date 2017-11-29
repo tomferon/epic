@@ -1,0 +1,3 @@
+module Data.Unit
+
+type Unit = Unit

@@ -1,0 +1,32 @@
+module Common
+
+import Data.Unit
+
+type Program a
+  = Pure a
+  | Print String (Program a)
+  | GetLine (String -> Program a)
+  | GetRandom (Int -> Program a)
+
+return : forall a. a -> Program a
+return = Pure
+
+>>= : forall a b. Program a -> (a -> Program b) -> Program b
+>>= = fix \bind -> \x -> \f ->
+  match x with
+    Pure a -> f a
+    Print str y -> Print str (bind y f)
+    GetLine g -> GetLine (\s -> bind (g s) f)
+    GetRandom g -> GetRandom (\i -> bind (g i) f)
+
+>> : forall a b. Program a -> Program b -> Program b
+>> = \x -> \y -> x >>= \u -> y
+
+print : String -> Program Unit
+print = \str -> Print str (Pure Unit)
+
+getLine : Program String
+getLine = GetLine (\s -> Pure s)
+
+getRandom : Program Int
+getRandom = GetRandom (\i -> Pure i)

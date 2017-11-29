@@ -1,0 +1,22 @@
+name:                 epic-example
+version:              0.1.0.0
+synopsis:             An example tool to show execution of Epic code.
+homepage:             https://github.com/thoferon/epic#readme
+license:              BSD3
+author:               Thomas Feron
+maintainer:           thomas.feron@redspline.com
+copyright:            2017 Thomas Feron
+category:             Language
+
+executables:
+  epic-example:
+    ghc-options:      -Wall -pgmL markdown-unlit
+    main:             Main.lhs
+    source-dirs:      .
+    dependencies:
+      - base >= 4.7 && < 5
+      - epic ==0.1.0.0
+      - markdown-unlit
+      - mtl
+      - random
+      - text

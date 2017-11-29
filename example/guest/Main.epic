@@ -1,0 +1,14 @@
+module Main
+
+import Data.Int
+
+import Common
+
+main : Program Int
+main =
+  print "Please enter your name: " >>
+  getLine >>= \name ->
+  print name >>
+  print "\n" >>
+  getRandom >>= \i ->
+  return (i % 100)
