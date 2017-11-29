@@ -22,15 +22,19 @@ dependencies:
   - text
 
 default-extensions:
+  - DefaultSignatures
   - DeriveFunctor
   - DeriveGeneric
   - FlexibleContexts
+  - FlexibleInstances
   - LambdaCase
+  - MultiParamTypeClasses
   - OverloadedStrings
   - PatternSynonyms
   - TemplateHaskell
   - TupleSections
   - TypeApplications
+  - TypeOperators
 
 library:
   source-dirs:        src

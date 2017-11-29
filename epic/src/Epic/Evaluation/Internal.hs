@@ -15,7 +15,7 @@ import           Epic.Language
 -- and Haskell functions.
 data EvalTerm s
   = BaseTerm Term
-  | TermWithContext Term [Thunk s]
+  | TermWithContext Term [Thunk s] [(T.Text, EvalTerm s)]
   | Constructor Int [Thunk s] -- ^ Parameters in reverse order
   | HaskellFunction (Thunk s -> ST s (EvalTerm s))
 
@@ -23,10 +23,10 @@ debugShowEvalTerm :: Int -> EvalTerm s -> ST s String
 debugShowEvalTerm 0 = \_ -> return "(max depth reached)"
 debugShowEvalTerm depth = \case
   BaseTerm t -> return $ "BaseTerm (" ++ show t ++ ")"
-  TermWithContext t ts -> do
+  TermWithContext t ts foreigns -> do
     strs <- mapM (debugShowEvalTerm (depth-1) <=< evalThunk) ts
     return $
-      "TermWithContext (" ++ show t ++ ") [" ++ intercalate ", " strs ++ "]"
+      "TermWithContext (" ++ show t ++ ") [" ++ intercalate ", " strs ++ "] _"
   Constructor i ts -> do
     strs <- mapM (debugShowEvalTerm (depth-1) <=< evalThunk) ts
     return $ "Constructor " ++ show i ++ " [" ++ intercalate ", " strs ++ "]"
@@ -52,6 +52,7 @@ makeThunk f = do
   ref <- newSTRef Nothing
   return $ Thunk f ref
 
+-- FIXME: Shouldn't it take a Term instead of an EvalTerm s?
 evalWHNFCtx :: [Thunk s] -> [(T.Text, EvalTerm s)] -> EvalTerm s
             -> ST s (EvalTerm s)
 evalWHNFCtx ctx foreigns = \case
@@ -73,7 +74,7 @@ evalWHNFCtx ctx foreigns = \case
                          ++ " for type " ++ T.unpack (def ^. typeName)
       Just i -> return $ Constructor i []
 
-  BaseTerm t@(Abstraction _ _) -> return $ TermWithContext t ctx
+  BaseTerm t@(Abstraction _ _) -> return $ TermWithContext t ctx foreigns
 
   BaseTerm (Application t t') -> do
     et <- evalWHNFCtx ctx foreigns $ toEvalTerm t
@@ -82,7 +83,7 @@ evalWHNFCtx ctx foreigns = \case
         et' <- makeThunk $ evalWHNFCtx ctx foreigns $ toEvalTerm t'
         evalWHNFCtx (et' : ctx) foreigns (toEvalTerm t'')
 
-      TermWithContext (Abstraction _ t'') ctx' -> do
+      TermWithContext (Abstraction _ t'') ctx' _ -> do
         et' <- makeThunk $ evalWHNFCtx ctx foreigns $ toEvalTerm t'
         evalWHNFCtx (et' : ctx') foreigns (toEvalTerm t'')
 

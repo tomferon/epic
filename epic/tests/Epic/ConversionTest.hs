@@ -7,6 +7,8 @@ import GHC.Generics
 import Control.Monad
 import Control.Monad.ST
 
+import Data.Either
+
 import Epic.Conversion
 import Epic.Evaluation
 import Epic.Language
@@ -20,20 +22,22 @@ conversionTests = testGroup "Epic.Conversion"
 data DummyType
   = FirstConstructor Bool
   | SecondConstructor Int Bool
+  | ThirdConstructor
+  | FourthConstructor
   deriving (Eq, Show, Generic)
 
 gtoEpicTests :: TestTree
 gtoEpicTests = testGroup "GToEpic"
   [ testCase "returns (0, []) for ()" $
       join $ stToIO $ do
-        (n, ts) <- gtoEpic $ from ()
+        (n, ts) <- gtoEpic 0 $ from ()
         return $ do
           n @?= 0
           assertBool "should be empty" $ null ts
 
   , testCase "returns (0, [thunk(2), thunk(1), thunk(0)]) for (0, 1, 2)" $ do
       join $ stToIO $ do
-        (n, ts) <- gtoEpic $ from (0 :: Int, 1 :: Int, 2 :: Int)
+        (n, ts) <- gtoEpic 0 $ from (0 :: Int, 1 :: Int, 2 :: Int)
         return $ case ts of
           [BaseTerm t2, BaseTerm t1, BaseTerm t0] -> do
             n @?= 0
@@ -44,8 +48,8 @@ gtoEpicTests = testGroup "GToEpic"
 
   , testCase "returns (0, []) for False and (1, []) for True" $
       join $ stToIO $ do
-        (n,  ts)  <- gtoEpic $ from False
-        (n', ts') <- gtoEpic $ from True
+        (n,  ts)  <- gtoEpic 0 $ from False
+        (n', ts') <- gtoEpic 0 $ from True
         return $ do
           n  @?= 0
           n' @?= 1
@@ -55,7 +59,7 @@ gtoEpicTests = testGroup "GToEpic"
   , testCase "returns (1, [thunk(True), thunk(42)]) for SecondConstructor 42\
              \ True" $ do
       join $ stToIO $ do
-        (n, ts)  <- gtoEpic $ from $ SecondConstructor 42 True
+        (n, ts)  <- gtoEpic 0 $ from $ SecondConstructor 42 True
         return $ case ts of
           [BaseTerm t, BaseTerm t'] -> do
             n  @?= 1
@@ -67,22 +71,24 @@ gtoEpicTests = testGroup "GToEpic"
 gfromEpicTests :: TestTree
 gfromEpicTests = testGroup "GFromEpic"
   [ testCase "returns () for Constructor 0 []" $
-      runST (to <$> gfromEpic (0, [])) @?= ()
+      runST ((to . snd . fromRight undefined) <$> gfromEpic (0, [])) @?= ()
 
   , testCase "returns (0, 1, 2) for (0, [BaseTerm (PrimInt 0), BaseTerm\
              \ (PrimInt 1), BaseTerm (PrimInt 2)])" $ do
       let ets = [ BaseTerm (PrimInt 0)
                 , BaseTerm (PrimInt 1)
                 , BaseTerm (PrimInt 2) ]
-      runST (to <$> gfromEpic (0, ets)) @?= (0 :: Int, 1 :: Int, 2 :: Int)
+      runST ((to . snd . fromRight undefined)
+               <$> gfromEpic (0, ets)) @?= (0 :: Int, 1 :: Int, 2 :: Int)
 
   , testCase "returns False for (0, []) and True for (1, [])" $ do
-      runST (to <$> gfromEpic (0, [])) @?= False
-      runST (to <$> gfromEpic (1, [])) @?= True
+      runST ((to . snd . fromRight undefined) <$> gfromEpic (0, [])) @?= False
+      runST ((to . snd . fromRight undefined) <$> gfromEpic (1, [])) @?= True
 
   , testCase "returns SecondConstructor 42 True for (1, [BaseTerm (PrimInt 42),\
              \ BaseTerm (PrimBool True)])" $
-      runST (to <$> gfromEpic (1, [ BaseTerm (PrimInt 42)
-                                  , BaseTerm (PrimBool True) ]))
+      runST ((to . snd . fromRight undefined)
+               <$> gfromEpic (1, [ BaseTerm (PrimInt 42)
+                                 , BaseTerm (PrimBool True) ]))
         @?= SecondConstructor 42 True
   ]

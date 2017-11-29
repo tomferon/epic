@@ -31,7 +31,7 @@ data EpicTest
   | EpicTest T.Text T.Text
   deriving Generic
 
-instance FromEpic EpicTest
+instance FromEpic s EpicTest
 
 toTestTree :: EpicTest -> TestTree
 toTestTree = \case
