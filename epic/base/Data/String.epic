@@ -1,0 +1,37 @@
+module Data.String
+
+import Data.List
+import Data.Option
+import Data.Tuple
+
+foreign data_string_eqString : String -> String -> Bool
+eqString = data_string_eqString
+
+foreign data_string_toCharList : String -> List Char
+toCharList = data_string_toCharList
+foreign data_string_fromCharList : String -> List Char
+fromCharList = data_string_fromCharList
+
+foreign data_string_singleton : Char -> String
+singleton = data_string_singleton
+
+foreign data_string_prependChar : Char -> String -> String
+prependChar = data_string_prependChar
+foreign data_string_appendChar : String -> Char -> String
+appendChar = data_string_appendChar
+foreign data_string_appendString : String -> String -> String
+appendString = data_string_appendString
+
+foreign data_string_unconsString : String -> Option (Pair Char String)
+unconsString = data_string_unconsString
+
+foreign data_string_isEmptyString : String -> Bool
+isEmptyString = data_string_isEmptyString
+foreign data_string_stringLength : String -> Int
+stringLength = data_string_stringLength
+
+emptyString : String
+emptyString = ""
+
+^ : String -> String -> String
+^ = appendString

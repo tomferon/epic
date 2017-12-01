@@ -40,6 +40,11 @@ quotRem = data_int_quotRem
 foreign data_int_divMod : Int -> Int -> Pair Int Int
 divMod = data_int_divMod
 
+foreign data_int_abs : Int -> Int
+abs = data_int_abs
+foreign data_int_negate : Int -> Int
+negate = data_int_negate
+
 == : Int -> Int -> Bool
 == = eqInt
 

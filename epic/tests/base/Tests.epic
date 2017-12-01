@@ -3,10 +3,14 @@ module Tests
 import Data.List
 
 import Data.BoolTest
+import Data.CharTest
 import Data.ListTest
+import Data.OptionTest
 import Data.TupleTest
 
 import TestHelpers
 
 allTests : List TestTree
-allTests = dataBoolTests :: dataListTests :: dataTupleTests :: Nil
+allTests =
+  dataBoolTests :: dataCharTests :: dataListTests :: dataOptionTests
+  :: dataTupleTests :: Nil

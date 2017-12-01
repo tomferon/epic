@@ -10,6 +10,9 @@ module Epic.Base
   , dataIntModule
   , dataIntForeigns
   , dataListModule
+  , dataOptionModule
+  , dataStringForeigns
+  , dataStringModule
   , dataTupleModule
   , dataUnitModule
   ) where
@@ -27,12 +30,12 @@ import           Epic.TH
 baseModules :: [Module]
 baseModules =
   [ dataBoolModule, dataCharModule, dataIntModule, dataListModule
-  , dataTupleModule, dataUnitModule
+  , dataOptionModule, dataStringModule, dataTupleModule, dataUnitModule
   ]
 
 baseForeigns :: ST s [(T.Text, EvalTerm s)]
-baseForeigns =
-  concat <$> sequence [dataBoolForeigns, dataCharForeigns, dataIntForeigns]
+baseForeigns = concat <$> sequence
+  [dataBoolForeigns, dataCharForeigns, dataIntForeigns, dataStringForeigns]
 
 dataBoolModule :: Module
 dataBoolModule = $(readModule "base/Data/Bool.epic")
@@ -82,9 +85,6 @@ dataCharForeigns = do
   toLowerFunc <- toEpic toLower
   toTitleFunc <- toEpic toTitle
 
-  digitToIntFunc <- toEpic digitToInt
-  intToDigitFunc <- toEpic intToDigit
-
   ordFunc <- toEpic ord
   chrFunc <- toEpic chr
 
@@ -119,9 +119,6 @@ dataCharForeigns = do
     , ("data_char_toLower", toLowerFunc)
     , ("data_char_toTitle", toTitleFunc)
 
-    , ("data_char_digitToInt", digitToIntFunc)
-    , ("data_char_intToDigit", intToDigitFunc)
-
     , ("data_char_ord", ordFunc)
     , ("data_char_chr", chrFunc)
     ]
@@ -139,7 +136,7 @@ dataIntForeigns = do
   geIntFunc <- toEpic ((>=) @Int)
   gtIntFunc <- toEpic ((>)  @Int)
 
-  showIntFunc <- toEpic (show @Int)
+  showIntFunc <- toEpic (T.pack . show @Int)
 
   addIntFunc      <- toEpic ((+) @Int)
   subtractIntFunc <- toEpic ((-) @Int)
@@ -151,10 +148,13 @@ dataIntForeigns = do
   modFunc  <- toEpic (mod  @Int)
 
   quotRemFunc <- toEpic (quotRem @Int)
-  divModFunc  <- toEpic (divMod @Int)
+  divModFunc  <- toEpic (divMod  @Int)
+
+  absFunc    <- toEpic (abs @Int)
+  negateFunc <- toEpic (negate @Int)
 
   return
-    [ ("data_int_eqInt", eqIntFunc)
+    [ ("data_int_eqInt",  eqIntFunc)
     , ("data_int_neqInt", neqIntFunc)
 
     , ("data_int_leInt", leIntFunc)
@@ -175,10 +175,55 @@ dataIntForeigns = do
 
     , ("data_int_quotRem", quotRemFunc)
     , ("data_int_divMod",  divModFunc)
+
+    , ("data_int_abs",    absFunc)
+    , ("data_int_negate", negateFunc)
     ]
 
 dataListModule :: Module
 dataListModule = $(readModule "base/Data/List.epic")
+
+dataOptionModule :: Module
+dataOptionModule = $(readModule "base/Data/Option.epic")
+
+dataStringForeigns :: ST s [(T.Text, EvalTerm s)]
+dataStringForeigns = do
+  eqStringFunc <- toEpic ((==) @T.Text)
+
+  toCharListFunc   <- toEpic T.unpack
+  fromCharListFunc <- toEpic T.pack
+
+  singletonFunc <- toEpic T.singleton
+
+  prependCharFunc  <- toEpic T.cons
+  appendCharFunc   <- toEpic T.snoc
+  appendStringFunc <- toEpic T.append
+
+  unconsStringFunc <- toEpic T.uncons
+
+  isEmptyStringFunc <- toEpic T.null
+  stringLengthFunc  <- toEpic T.length
+
+  return
+    [ ("data_string_eqString", eqStringFunc)
+
+    , ("data_string_toCharList",   toCharListFunc)
+    , ("data_string_fromCharList", fromCharListFunc)
+
+    , ("data_string_singleton", singletonFunc)
+
+    , ("data_string_prependChar",   prependCharFunc)
+    , ("data_string_appendChar",    appendCharFunc)
+    , ("data_string_appendString",  appendStringFunc)
+
+    , ("data_string_unconsString", unconsStringFunc)
+
+    , ("data_string_isEmptyString", isEmptyStringFunc)
+    , ("data_string_stringLength",  stringLengthFunc)
+    ]
+
+dataStringModule :: Module
+dataStringModule = $(readModule "base/Data/String.epic")
 
 dataTupleModule :: Module
 dataTupleModule = $(readModule "base/Data/Tuple.epic")

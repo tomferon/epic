@@ -1,5 +1,9 @@
 module Data.Char
 
+import Data.Bool
+import Data.Int
+import Data.Option
+
 foreign data_char_eqChar : Char -> Char -> Bool
 eqChar = data_char_eqChar
 foreign data_char_neqChar : Char -> Char -> Bool
@@ -56,13 +60,29 @@ toLower = data_char_toLower
 foreign data_char_toTitle : Char -> Char
 toTitle = data_char_toTitle
 
-# FIXME: These functions might fail, they should be replaced.
-foreign data_char_digitToInt : Char -> Int
-digitToInt = data_char_digitToInt
-foreign data_char_intToDigit : Int -> Char
-intToDigit = data_char_intToDigit
-
 foreign data_char_ord : Char -> Int
 ord = data_char_ord
 foreign data_char_chr : Int -> Char
 chr = data_char_chr
+
+# FIXME: rewrite with let bindings
+digitToInt : Char -> Option Int
+digitToInt = \c ->
+  if ord '0' <= ord c && ord c <= ord '9'
+    then Some (ord c - ord '0')
+    else
+      if ord 'A' <= ord c && ord c <= ord 'F'
+        then Some (ord c - ord 'A' + 10)
+        else
+          if ord 'a' <= ord c && ord c <= ord 'f'
+            then Some (ord c - ord 'a' + 10)
+            else None
+
+intToDigit : Int -> Option Char
+intToDigit = \i ->
+  if 0 <= i && i <= 9
+    then Some (chr (i + ord '0'))
+    else
+      if 10 <= i && i <= 15
+        then Some (chr (i - 10 + ord 'a'))
+        else None

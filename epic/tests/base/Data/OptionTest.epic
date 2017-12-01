@@ -1,0 +1,19 @@
+module Data.OptionTest
+
+import Data.Int
+import Data.List
+import Data.Option
+
+import TestHelpers
+
+fromOptionTests : TestTree
+fromOptionTests = TestGroup "fromOption"
+  (Test "returns the default value if None"
+        (if fromOption 3 None == 3 then "" else "didn't return 3")
+   :: Test "returns the value inside Some"
+           (if fromOption 1 (Some 2) == 2 then "" else "didn't return 2")
+   :: Nil)
+
+dataOptionTests : TestTree
+dataOptionTests = TestGroup "Data.Option"
+  (fromOptionTests :: Nil)

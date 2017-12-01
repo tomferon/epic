@@ -72,7 +72,8 @@ functions in `GetLine` and `GetRandom` because the rest of the programs will
 obviously depends on the result of the operation. Finally, note that there is no
 instance of `FromEpic s (a -> b)` (it would be impossible to write) but there is
 one for `(a -> ST s b)`, hence the use of the ST monad here. The ST monad is
-used when evaluating code in Epic (STRef's are used for thunks.)
+used when evaluating code in Epic (STRef's are used for thunks.) You can think
+of such a data structure as the `IO` monad in Haskell.
 
 In Epic, we have the corresponding type:
 
@@ -115,11 +116,16 @@ program.
 runProgram :: Program RealWorld a -> IO a
 runProgram prog = case prog of
   Pure a -> return a
-  Print str prog' -> T.putStr str >> runProgram prog'
+
+  Print str prog' -> do
+    T.putStr str
+    runProgram prog'
+
   GetLine f -> do
     str <- T.getLine
     prog' <- stToIO (f str)
     runProgram prog'
+
   GetRandom f -> do
     i <- randomIO
     prog' <- stToIO (f i)

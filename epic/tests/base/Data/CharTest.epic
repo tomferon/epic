@@ -1,0 +1,46 @@
+module Data.CharTest
+
+import Data.Char
+import Data.Int
+import Data.List
+import Data.Option
+import Data.String
+
+import TestHelpers
+
+digitToIntTests : TestTree
+digitToIntTests = TestGroup "digitToInt"
+  (Test "returns Some 4 for '4'"
+        (if eqOption eqInt (digitToInt '4') (Some 4)
+         then "" else "didn't return Some 4")
+   :: Test "returns Some 13 for 'd'"
+           (if eqOption eqInt (digitToInt 'd') (Some 13)
+            then "" else "didn't return Some 13")
+   :: Test "returns Some 11 for 'B'"
+           (if eqOption eqInt (digitToInt 'B') (Some 11)
+            then "" else "didn't return Some 11")
+   :: Test "returns None for '.' (< '0')"
+           (if isNone (digitToInt '.') then "" else "returned Some")
+   :: Test "returns None for 'z' (> 'z')"
+           (if isNone (digitToInt '.') then "" else "returned Some")
+   :: Test "returns None for 'Z' (> 'F', < 'a')"
+           (if isNone (digitToInt '.') then "" else "returned Some")
+   :: Nil)
+
+intToDigitTests : TestTree
+intToDigitTests = TestGroup "intToDigit"
+  (Test "returns Some '8' for 8"
+        (if eqOption eqChar (intToDigit 8) (Some '8')
+         then "" else "didn't return Some '8'")
+   :: Test "returns Some 'c' for 12"
+           (if eqOption eqChar (intToDigit 12) (Some 'c')
+            then "" else "didn't return Some 'c'")
+   :: Test "returns None for -100"
+           (if isNone (intToDigit (-100)) then "" else "returned Some")
+   :: Test "returns None for 100"
+           (if isNone (intToDigit 100) then "" else "returned Some")
+   :: Nil)
+
+dataCharTests : TestTree
+dataCharTests = TestGroup "Data.Char"
+  (digitToIntTests :: intToDigitTests :: Nil)

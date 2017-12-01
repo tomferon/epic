@@ -1,0 +1,36 @@
+module Data.Option
+
+type Option a = None | Some a
+
+eqOption : forall a. (a -> a -> Bool) -> Option a -> Option a -> Bool
+eqOption = \f -> \optL -> \optR ->
+  match optL with
+    None -> (match optR with
+               None -> true
+               _ -> false)
+    Some x -> (match optR with
+                 None -> false
+                 Some y -> f x y)
+
+mapOption : forall a b. (a -> b) -> Option a -> Option b
+mapOption = \f -> \opt -> match opt with
+  None   -> None
+  Some x -> Some (f x)
+
+option : forall a b. a -> (b -> a) -> Option b -> a
+option = \def -> \f -> \opt -> match opt with
+  None   -> def
+  Some x -> f x
+
+fromOption : forall a. a -> Option a -> a
+fromOption = \def -> option def (\x -> x)
+
+isNone : forall a. Option a -> Bool
+isNone = \opt -> match opt with
+  None -> true
+  _ -> false
+
+isSome : forall a. Option a -> Bool
+isSome = \opt -> match opt with
+  Some _ -> true
+  _ -> false

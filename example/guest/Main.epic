@@ -1,14 +1,43 @@
 module Main
 
+import Data.Char
 import Data.Int
+import Data.Option
+import Data.String
+import Data.Tuple
 
 import Common
 
+readInt : Int -> String -> Option Int
+readInt = fix \rec -> \acc -> \str ->
+  match unconsString str with
+    None -> Some acc
+    Some (Pair c str') ->
+      match digitToInt c with
+        Some i -> rec (acc * 10 + i) str'
+        None -> None
+
+guessNumber : Int -> Int -> Program Int
+guessNumber = fix \rec -> \n -> \target ->
+  if n > 0
+    then
+      print ("You have " ^ showInt n ^ " attempts left. What's your guess? ") >>
+      getLine >>= \str ->
+      match readInt 0 str with
+        None -> (print "Unreadable guess.\n" >> rec n target)
+        Some guess ->
+          if guess < target
+            then (print "Too low. " >> rec (n-1) target)
+            else
+              if guess > target
+                then print "Too high. " >> rec (n-1) target
+                else print "You win!\n" >> return 0
+    else
+      print ("You lose. It was " ^ showInt target ^ ".\n") >>
+      return 1
+
 main : Program Int
 main =
-  print "Please enter your name: " >>
-  getLine >>= \name ->
-  print name >>
-  print "\n" >>
+  print ("I picked a number in [0,100). Let's play.\n") >>
   getRandom >>= \i ->
-  return (i % 100)
+  guessNumber 6 (abs (i % 100))
