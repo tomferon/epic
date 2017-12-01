@@ -268,10 +268,12 @@ typeCheck ctx fqterm = case fqterm of
     (tec', tyc) <- typeCheck ctx tec
     (te1', ty1) <- typeCheck ctx te1
     (te2', ty2) <- typeCheck ctx te2
+    (ty1Mono, _) <- monomorphiseType $ snd $ removeFacingUniversals ty1
+    (ty2Mono, _) <- monomorphiseType $ snd $ removeFacingUniversals ty2
     unify tyc PrimTypeBoolM
     (i, tyU) <- newMetaVar
-    unify tyU ty1
-    unify tyU ty2
+    unify tyU ty1Mono
+    unify tyU ty2Mono
     mt <- getMetaType i
     return (IfThenElse tec' te1' te2', mt)
 
@@ -311,7 +313,8 @@ typeCheckPatternMatch ctx te pairs = do
       unify headmty patmty
 
       (te', temty) <- typeCheck (extraCtx ++ ctx) te
-      unify temty branchmty
+      (temtyMono, _) <- monomorphiseType $ snd $ removeFacingUniversals temty
+      unify temtyMono branchmty
 
       missing' <- case removeMissingPattern missing pat' of
         Nothing -> throwError "redundant pattern"
@@ -371,11 +374,18 @@ unify l r = case (l, r) of
       let ty2' = substDeBruijnIndex 0 [(0, mt2)] ty2
       unify ty1 ty2'
 
-    (FunctionTypeM tyIn tyOut, UniversalTypeM ty) ->
-      universalHelper 1 tyIn tyOut ty
+    (FunctionTypeM tyIn tyOut, ty@(UniversalTypeM _)) -> do
+      let (n, ty') = removeFacingUniversals ty
+      case ty' of
+        FunctionTypeM tyIn' tyOut' -> do
+          (tyInMono, repl) <- monomorphiseType tyIn'
+          let tyOut'' = addUniversals (n - length repl) $
+                          substDeBruijnIndex 0 repl tyOut'
+          unify (FunctionTypeM tyIn tyOut) (FunctionTypeM tyInMono tyOut'')
+        mt -> throwError $ "can't unify universal type with " <> prettyPrint mt
 
     (ty1, UniversalTypeM ty2) -> do
-      (ty2', _) <- monomorphiseType 0 [] ty2
+      (ty2', _) <- monomorphiseType ty2
       unify ty1 ty2'
 
     -- FIXME: (UniversalTypeM ty1, ty2) -> remove potentially useless forall
@@ -395,49 +405,6 @@ unify l r = case (l, r) of
       "can't unify type " <> prettyPrint l <> "\n\twith " <> prettyPrint r
 
   where
-    universalHelper :: Int -> MetaType -> MetaType -> MetaType -> TypeChecker ()
-    universalHelper count tyIn tyOut = \case
-      UniversalTypeM ty -> universalHelper (count+1) tyIn tyOut ty
-      FunctionTypeM tyIn' tyOut' -> do
-        (tyInMono, repl) <- monomorphiseType 0 [] tyIn'
-        let tyOut'' = addUniversals (count - length repl) $
-                        substDeBruijnIndex 0 repl tyOut'
-        unify (FunctionTypeM tyIn tyOut) (FunctionTypeM tyInMono tyOut'')
-      mt -> throwError $ "can't unify universal type with " <> prettyPrint mt
-
-    -- It takes a type without the leading UniversalType constructors,
-    -- replaces the type variables by meta variables and returns the newly
-    -- constructed type together with the list of replacements.
-    -- It does not replace type variables of other UniversalType it encounters.
-    monomorphiseType :: Int -> [(Int, MetaType)] -> MetaType
-                     -> TypeChecker (MetaType, [(Int, MetaType)])
-    monomorphiseType threshold acc = \case
-      t@(MetaIndex _) -> return (t, acc)
-      t@(TypeVariableM i)
-        | i >= threshold ->
-            case lookup i acc of
-              Nothing -> do
-                (_, mvar) <- newMetaVar
-                return (mvar, (i, mvar) : acc)
-              Just mt -> return (mt, acc)
-        | otherwise -> return (t, acc)
-      FunctionTypeM t1 t2 -> do
-        (t1', acc')  <- monomorphiseType threshold acc  t1
-        (t2', acc'') <- monomorphiseType threshold acc' t2
-        return (FunctionTypeM t1' t2', acc'')
-      UniversalTypeM t -> do
-        (t', acc') <- monomorphiseType (threshold + 1) acc t
-        return (UniversalTypeM t', acc')
-      PrimTypeBoolM -> return (PrimTypeBoolM, acc)
-      PrimTypeIntM -> return (PrimTypeIntM, acc)
-      PrimTypeCharM -> return (PrimTypeCharM, acc)
-      PrimTypeStringM -> return (PrimTypeStringM, acc)
-      TypeConstructorM ref -> return (TypeConstructorM ref, acc)
-      TypeApplicationM t1 t2 -> do
-        (t1', acc')  <- monomorphiseType threshold acc  t1
-        (t2', acc'') <- monomorphiseType threshold acc' t2
-        return (TypeApplicationM t1' t2', acc'')
-
     addUniversals :: Int -> MetaType -> MetaType
     addUniversals 0 = id
     addUniversals i = UniversalTypeM . addUniversals (i-1)
@@ -448,6 +415,50 @@ unify l r = case (l, r) of
       case mMT of
         Nothing -> addMetaType i t
         Just mt -> unify mt t
+
+removeFacingUniversals :: MetaType -> (Int, MetaType)
+removeFacingUniversals = go 0
+  where
+    go :: Int -> MetaType -> (Int, MetaType)
+    go acc = \case
+      UniversalTypeM t -> go (acc + 1) t
+      t -> (acc, t)
+
+-- | It takes a type without the leading UniversalType constructors,
+-- replaces the type variables by meta variables and returns the newly
+-- constructed type together with the list of replacements.
+-- It does not replace type variables of other UniversalType it encounters.
+monomorphiseType :: MetaType -> TypeChecker (MetaType, [(Int, MetaType)])
+monomorphiseType = go 0 []
+  where
+    go :: Int -> [(Int, MetaType)] -> MetaType
+       -> TypeChecker (MetaType, [(Int, MetaType)])
+    go threshold acc = \case
+      t@(MetaIndex _) -> return (t, acc)
+      t@(TypeVariableM i)
+        | i >= threshold ->
+            case lookup i acc of
+              Nothing -> do
+                (_, mvar) <- newMetaVar
+                return (mvar, (i, mvar) : acc)
+              Just mt -> return (mt, acc)
+        | otherwise -> return (t, acc)
+      FunctionTypeM t1 t2 -> do
+        (t1', acc')  <- go threshold acc  t1
+        (t2', acc'') <- go threshold acc' t2
+        return (FunctionTypeM t1' t2', acc'')
+      UniversalTypeM t -> do
+        (t', acc') <- go (threshold + 1) acc t
+        return (UniversalTypeM t', acc')
+      PrimTypeBoolM -> return (PrimTypeBoolM, acc)
+      PrimTypeIntM -> return (PrimTypeIntM, acc)
+      PrimTypeCharM -> return (PrimTypeCharM, acc)
+      PrimTypeStringM -> return (PrimTypeStringM, acc)
+      TypeConstructorM ref -> return (TypeConstructorM ref, acc)
+      TypeApplicationM t1 t2 -> do
+        (t1', acc')  <- go threshold acc  t1
+        (t2', acc'') <- go threshold acc' t2
+        return (TypeApplicationM t1' t2', acc'')
 
 -- FIXME: what about nested forall's?
 substDeBruijnIndex :: Int -> [(Int, MetaType)] -> MetaType -> MetaType

@@ -277,6 +277,42 @@ typeOfTests = testGroup "typeOf"
                  [ ((ModuleName ["A"], "Pair"), pairDef) ]
 
       evalStateT (typeOf fqterm) st @?= Right (term, Type typ)
+
+  , testCase "returns Option Int for if true then None else Some 3 or\
+             \ if true then Some 3 else None" $ do
+      let optionFQDef = TypeDefinition "Option" [()]
+            [("None", []), ("Some", [FQType (TypeVariable 0)])]
+          optionFQRef = Ref (ModuleName ["A"]) "Option" optionFQDef
+
+          optionDef = TypeDefinition "Option" [Star]
+            [("None", []), ("Some", [Type (TypeVariable 0)])]
+          optionRef = Ref (ModuleName ["A"]) "Option" optionDef
+
+          fqterm = IfThenElse (PrimBool True)
+            (ConstructorReference optionFQRef "None")
+            (Application (ConstructorReference optionFQRef "Some")
+                         (PrimInt 3))
+          term = IfThenElse (PrimBool True)
+            (ConstructorReference optionRef "None")
+            (Application (ConstructorReference optionRef "Some")
+                         (PrimInt 3))
+
+          fqterm' = IfThenElse (PrimBool True)
+            (Application (ConstructorReference optionFQRef "Some")
+                         (PrimInt 3))
+            (ConstructorReference optionFQRef "None")
+          term' = IfThenElse (PrimBool True)
+            (Application (ConstructorReference optionRef "Some")
+                         (PrimInt 3))
+            (ConstructorReference optionRef "None")
+
+          typ = TypeApplication (TypeConstructor optionRef) PrimTypeInt
+
+          st = emptyTypeCheckerState & kindedDefinitions .~
+                 [ ((ModuleName ["A"], "Option"), optionDef) ]
+
+      evalStateT (typeOf fqterm)  st @?= Right (term,  Type typ)
+      evalStateT (typeOf fqterm') st @?= Right (term', Type typ)
   ]
 
 unifyTests :: TestTree
